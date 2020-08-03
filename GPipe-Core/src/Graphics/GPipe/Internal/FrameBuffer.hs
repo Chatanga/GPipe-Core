@@ -48,18 +48,21 @@ runDrawColors (DrawColors m) = foldl sf (return (), return (), const (return [],
 
 -- | Draw color values into a color renderable texture image.
 drawColor :: forall c s os. ColorRenderable c => (s -> (Image (Format c), ColorMask c, UseBlending)) -> FragColor c -> DrawColors os s ()
-drawColor sf c = DrawColors $ do n <- get
-                                 put $ n+1
-                                 lift $ tell [\ix -> make3  (setColor cf ix c) $ \s -> let (i, mask, o) = sf s
-                                                                                           n' = fromIntegral n
-                                                                                           useblend = if o then glEnablei GL_BLEND n' else glDisablei GL_BLEND n'
-                                                                                       in (getImageFBOKey i,
-                                                                                           getImageBinding i (GL_COLOR_ATTACHMENT0 + n'),
-                                                                                            do
-                                                                                             useblend
-                                                                                             setGlColorMask cf n' mask)
-                                                                                       ]
-    where cf = undefined :: c
+drawColor sf c = DrawColors $ do
+  n <- get
+  put $ n+1
+  lift $ tell [\ix -> make3 (setColor cf ix c) $ \s ->
+    let (i, mask, o) = sf s
+        n' = fromIntegral n
+        useblend = if o then glEnablei GL_BLEND n' else glDisablei GL_BLEND n'
+    in  ( getImageFBOKey i
+        , getImageBinding i (GL_COLOR_ATTACHMENT0 + n')
+        , do
+            useblend
+            setGlColorMask cf n' mask
+        )
+    ]
+  where cf = undefined :: c
 
 -- | Draw all fragments in a 'FragmentStream' using the provided function that passes each fragment value into a 'DrawColors' monad. The first argument is a function
 --   that retrieves a 'Blending' setting from the shader environment, which will be used for all 'drawColor' actions in the 'DrawColors' monad where 'UseBlending' is 'True'.
@@ -152,11 +155,23 @@ tellDrawcalls (FragmentStream xs) f = do
                                let g (x, fd) = tellDrawcall $ makeDrawcall (f x) fd
                                mapM_ g xs
 
-makeDrawcall :: (ExprM (), GlobDeclM (), s -> (Either WinId (IO FBOKeys, IO ()), IO ())) -> FragmentStreamData -> IO (Drawcall s)
-makeDrawcall (sh, shd, wOrIo) (FragmentStreamData rastN shaderpos (PrimitiveStreamData primN ubuff) keep) =
+makeDrawcall ::
+    ( ExprM () -- sh - shader
+    , GlobDeclM () -- shd - shader declarations
+    , s -> (Either WinId (IO FBOKeys, IO ()), IO ()) -- wOrIo - where to draw, as a window ID or another mean with some IO?
+    )
+    -> FragmentStreamData -> IO (Drawcall s)
+
+makeDrawcall (sh, shd, wOrIo) (FragmentStreamData rastN Nothing shaderpos (PrimitiveStreamData primN ubuff) keep) =
        do (fsource, funis, fsamps, _, prevDecls, prevS) <- runExprM shd (discard keep >> sh)
           (vsource, vunis, vsamps, vinps, _, _) <- runExprM prevDecls (prevS >> shaderpos)
-          return $ Drawcall wOrIo primN rastN vsource fsource vinps vunis vsamps funis fsamps ubuff
+          return $ Drawcall wOrIo primN rastN vsource Nothing fsource vinps vunis vsamps [] [] funis fsamps ubuff
+
+makeDrawcall (sh, shd, wOrIo) (FragmentStreamData rastN (Just geopos) shaderpos (PrimitiveStreamData primN ubuff) keep) =
+       do (fsource, funis, fsamps, _, prevDecls, prevS) <- runExprM shd (discard keep >> sh)
+          (gsource, gunis, gsamps, _, prevDecls2, prevS2) <- runExprM prevDecls (prevS >> shaderpos)
+          (vsource, vunis, vsamps, vinps, _, _) <- runExprM prevDecls2 (prevS2 >> geopos)
+          return $ Drawcall wOrIo primN rastN vsource (Just gsource) fsource vinps vunis vsamps gunis gsamps funis fsamps ubuff
 
 setColor :: forall c. ColorSampleable c => c -> Int -> FragColor c -> (ExprM (), GlobDeclM ())
 setColor ct n c = let    name = "out" ++ show n

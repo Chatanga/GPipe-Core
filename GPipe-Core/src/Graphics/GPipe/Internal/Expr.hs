@@ -1,6 +1,4 @@
-{-# LANGUAGE GADTs, EmptyDataDecls, NoMonomorphismRestriction,
-  TypeFamilies, ScopedTypeVariables, FlexibleInstances, RankNTypes,
-  MultiParamTypeClasses, FlexibleContexts, OverloadedStrings #-}
+{-# LANGUAGE GADTs, EmptyDataDecls, NoMonomorphismRestriction, TypeFamilies, ScopedTypeVariables, FlexibleInstances, RankNTypes, MultiParamTypeClasses, FlexibleContexts, OverloadedStrings #-}
 
 module Graphics.GPipe.Internal.Expr where
 
@@ -10,6 +8,7 @@ import Control.Monad (void, when)
 import Control.Monad.Trans.Writer
 import Control.Monad.Trans.State
 import Control.Monad.Trans.Reader
+import Data.Maybe
 import Data.Monoid (mconcat, mappend)
 import qualified Control.Monad.Trans.Class as T (lift)
 import Data.SNMap
@@ -57,28 +56,60 @@ type ExprM = SNMapReaderT [String] (StateT ExprState (WriterT String (StateT Nex
 data ExprState = ExprState {
                 shaderUsedUniformBlocks :: Map.IntMap (GlobDeclM ()),
                 shaderUsedSamplers :: Map.IntMap (GlobDeclM ()),
-                shaderUsedInput :: Map.IntMap (GlobDeclM (), (ExprM (), GlobDeclM ())) -- For vertex shaders, the shaderM is always undefined and the int is the parameter name, for later shader stages it uses some name local to the transition instead
-                 }
+                shaderUsedInput :: Map.IntMap
+                        ( GlobDeclM () -- Input declaration in the current shader.
+                        ,   ( ExprM () -- Output assignement required in the previous shader (obviously undefined for the first shader - see comment below.)
+                            , GlobDeclM () -- Output declaration required in the previous shader.
+                            ) -- Requirements for the previous shader.
+                        ), -- For vertex shaders, the shaderM is always undefined and the int is the parameter name, for later shader stages it uses some name local to the transition instead
+                shaderGeometry :: (Maybe (GlobDeclM ()), Maybe (GlobDeclM ()))
+            }
 
-runExprM :: GlobDeclM () -> ExprM () -> IO (String, [Int], [Int], [Int], GlobDeclM (), ExprM ())
+{- Rough idea:
+
+    makeDrawcall (sh, shd, _) =
+        do  (fsource, funis, fsamps, _, prevDecls1, prevS1) <- runExprM shd sh
+            (gsource, gunis, gsamps, _, prevDecls2, prevS2) <- runExprM prevDecls1 prevS1
+            (vsource, vunis, vsamps, vinps, _, _) <- runExprM prevDecls2 prevS2
+            return $ Drawcall _ _ _ vsource gsource fsource vinps vunis vsamps gunis gsamps funis fsamps _
+
+    The sN+1 expression obtained when evaluating a sN expression basically
+    contains the values transformed by the matching arrow (ToVertex, ToFragment...).
+    In this regard, the evaluation is the inverse arrow with the side effect of
+    outputting the shader source.
+-}
+runExprM
+    :: GlobDeclM () -- output declarations to include in this shader
+    -> ExprM () -- expression to construct in this shader (including assignements to the output variables)
+    -> IO
+        ( String -- shader source produced
+        , [Int] -- uniforms used in this shader
+        , [Int] -- samplers used in this shader
+        , [Int] -- (varying) inputs used in this shader
+        , GlobDeclM () -- output declarations required in the previous shader
+        , ExprM () -- expression to construct in the previous shader
+        )
 runExprM d m = do
-               (st, body) <- evalStateT (runWriterT (execStateT (runSNMapReaderT (m :: ExprM ())) (ExprState Map.empty Map.empty Map.empty))) 0
-               let (unis, uniDecls) = unzip $ Map.toAscList (shaderUsedUniformBlocks st)
-                   (samps, sampDecls) = unzip $ Map.toAscList (shaderUsedSamplers st)
-                   (inps, inpDescs) = unzip $ Map.toAscList (shaderUsedInput st)
-                   (inpDecls, prevDesc) = unzip inpDescs
-                   (prevSs, prevDecls) = unzip prevDesc
-                   decls = do d
-                              sequence_ uniDecls
-                              sequence_ sampDecls
-                              sequence_ inpDecls
-                   source = mconcat [
-                                "#version 330\n",
-                                execWriter decls,
-                                "void main() {\n",
-                                body,
-                                "}\n"]
-               return (source, unis, samps, inps, sequence_ prevDecls, sequence_ prevSs)
+    (st, body) <- evalStateT (runWriterT (execStateT (runSNMapReaderT m) (ExprState Map.empty Map.empty Map.empty (Nothing, Nothing)))) 0
+    let (unis, uniDecls) = unzip $ Map.toAscList (shaderUsedUniformBlocks st)
+        (samps, sampDecls) = unzip $ Map.toAscList (shaderUsedSamplers st)
+        (inps, inpDescs) = unzip $ Map.toAscList (shaderUsedInput st)
+        geoDescs = fst (shaderGeometry st)
+        (inpDecls, prevDesc) = unzip inpDescs
+        (prevSs, prevDecls) = unzip prevDesc
+        decls = do  d
+                    when (isJust geoDescs) (fromJust geoDescs)
+                    sequence_ uniDecls
+                    sequence_ sampDecls
+                    sequence_ inpDecls
+        source = mconcat
+                    [ "#version 330\n"
+                    , execWriter decls
+                    , "void main() {\n"
+                    , body
+                    , "}\n"
+                    ]
+    return (source, unis, samps, inps, sequence_ prevDecls, sequence_ prevSs)
 
 type GlobDeclM = Writer String
 
@@ -145,6 +176,47 @@ useVInput stype i =
                         tellGlobal " in"
                         tellGlobalLn $ show i
 
+useGInput :: String -> SType -> Int -> Int -> ExprM String -> ExprM String
+useGInput qual stype i n v =
+             do s <- T.lift get
+                T.lift $ put $ s { shaderUsedInput = Map.insert n (gDeclIn, (assignOutput, gDeclOut)) $ shaderUsedInput s }
+                return $ prefix ++ show n ++ "[" ++ show i ++ "]"
+    where
+        prefix = "v_pouet_f"
+
+        -- Output assignement in the previous shader
+        assignOutput = do val <- v
+                          let name = prefix ++ show n
+                          tellAssignment' name val
+
+        -- Output declaration in the previous shader.
+        gDeclOut = do   tellGlobal $ qual ++ " out "
+                        tellGlobal $ stypeName stype
+                        tellGlobal $ ' ':prefix
+                        tellGlobalLn $ show n
+
+        -- Input declaration in the current shader.
+        gDeclIn = do    tellGlobal $ qual ++ " in "
+                        tellGlobal $ stypeName stype
+                        tellGlobal $ ' ':prefix
+                        tellGlobal $ show n
+                        tellGlobalLn $ "[]"
+
+useFInputFromG :: String -> SType -> Int -> ExprM String -> ExprM String
+useFInputFromG qual stype i v =
+             do s <- T.lift get
+                val :: Int <- read <$> v
+                T.lift $ put $ s { shaderUsedInput = Map.insert i (gDecl val (qual ++ " in "), (return (), gDecl val (qual ++ " out "))) $ shaderUsedInput s }
+                return $ prefix ++ show val
+    where
+        prefix = "truc"
+
+        gDecl val s = do
+            tellGlobal s
+            tellGlobal $ stypeName stype
+            tellGlobal $ ' ':prefix
+            tellGlobalLn $ show val
+
 useFInput :: String -> String -> SType -> Int -> ExprM String -> ExprM String
 useFInput qual prefix stype i v =
              do s <- T.lift get
@@ -160,6 +232,14 @@ useFInput qual prefix stype i v =
                         tellGlobal $ ' ':prefix
                         tellGlobalLn $ show i
 
+
+declareGeometryLayout :: String -> String -> Int -> ExprM ()
+declareGeometryLayout inputPrimitive outputPrimitive maxVertices = T.lift $ modify $ \ s -> s { shaderGeometry = (Just gDeclBlock, Nothing) }
+    where
+        gDeclBlock = do
+            tellGlobalLn $ "layout(" ++ inputPrimitive ++ ") in"
+            tellGlobalLn $ "layout(" ++ outputPrimitive ++ ") out"
+            tellGlobalLn $ "layout(max_vertices = " ++ show maxVertices ++ ") in"
 
 useUniform :: GlobDeclM () -> Int -> Int -> ExprM String
 useUniform decls blockI offset =
@@ -266,11 +346,13 @@ shaderbaseDeclareDef styp = do var <- T.lift $ T.lift $ T.lift $ T.lift getNext
                                tell [root]
                                return $ S $ return root
 
-shaderbaseAssignDef  (S shaderM) = do ul <- T.lift shaderM
-                                      xs <- get
-                                      put $ tail xs
-                                      T.lift $ tellAssignment' (head xs) ul
-                                      return ()
+shaderbaseAssignDef :: (S x a) -> StateT [String] ExprM ()
+shaderbaseAssignDef (S shaderM) = do ul <- T.lift shaderM
+                                     xs <- get
+                                     put $ tail xs
+                                     T.lift $ tellAssignment' (head xs) ul
+                                     return ()
+
 shaderbaseReturnDef :: ReaderT (ExprM [String]) (State Int) (S x a)
 shaderbaseReturnDef = do i <- T.lift getNext
                          m <- ask
@@ -372,9 +454,14 @@ ifThenElse :: forall a b x. (ShaderType a x, ShaderType b x) => S x Bool -> (a -
 ifThenElse c t e i = fromBase x $ ifThenElse_ c (toBase x . t . fromBase x) (toBase x . e . fromBase x) (toBase x i)
     where
         x = undefined :: x
-        ifThenElse_ :: S x Bool -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType b) x) -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType b) x) -> ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType b) x
+        ifThenElse_
+                :: S x Bool
+                -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType b) x)
+                -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType b) x)
+                -> ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType b) x
         ifThenElse_ bool thn els a =
-            let ifM = memoizeM $ do
+            let ifM :: ExprM [String]
+                ifM = memoizeM $ do
                            boolStr <- unS bool
                            (lifted, aDecls) <- runWriterT $ shaderbaseDeclare (toBase x (errShaderType :: a))
                            void $ evalStateT (shaderbaseAssign a) aDecls

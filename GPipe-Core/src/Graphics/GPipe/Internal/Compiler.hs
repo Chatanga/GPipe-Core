@@ -35,10 +35,13 @@ data Drawcall s = Drawcall {
                     drawcallName :: Int,
                     rasterizationName :: Int,
                     vertexsSource :: String,
+                    optionalGeometrySource :: Maybe String,
                     fragmentSource :: String,
                     usedInputs :: [Int],
                     usedVUniforms :: [Int],
                     usedVSamplers :: [Int],
+                    usedGUniforms :: [Int],
+                    usedGSamplers :: [Int],
                     usedFUniforms :: [Int],
                     usedFSamplers :: [Int],
                     primStrUBufferSize :: Int -- The size of the ubuffer for uniforms in primitive stream
@@ -56,14 +59,17 @@ data RenderIOState s = RenderIOState
         uniformNameToRenderIO :: Map.IntMap (s -> Binding -> IO ()), -- TODO: Return buffer name here when we start writing to buffers during rendering (transform feedback, buffer textures)
         samplerNameToRenderIO :: Map.IntMap (s -> Binding -> IO Int), -- IO returns texturename for validating that it isnt used as render target
         rasterizationNameToRenderIO :: Map.IntMap (s -> IO ()),
+        geometrizationNameToRenderIO :: Map.IntMap (s -> IO ()),
         inputArrayToRenderIOs :: Map.IntMap (s -> [([Binding], GLuint, Int) -> ((IO [VAOKey], IO ()), IO ())])
     }
 
 newRenderIOState :: RenderIOState s
-newRenderIOState = RenderIOState Map.empty Map.empty Map.empty Map.empty
+newRenderIOState = RenderIOState Map.empty Map.empty Map.empty Map.empty Map.empty
 
 mapRenderIOState :: (s -> s') -> RenderIOState s' -> RenderIOState s -> RenderIOState s
-mapRenderIOState f (RenderIOState a b c d) (RenderIOState i j k l) = let g x = x . f in RenderIOState (Map.union i $ Map.map g a) (Map.union j $ Map.map g b) (Map.union k $ Map.map g c) (Map.union l $ Map.map g d)
+mapRenderIOState f (RenderIOState a b c d e) (RenderIOState i j k l m) =
+    let g x = x . f
+    in  RenderIOState (Map.union i $ Map.map g a) (Map.union j $ Map.map g b) (Map.union k $ Map.map g c) (Map.union l $ Map.map g d) (Map.union m $ Map.map g e)
 
 
 
@@ -73,12 +79,16 @@ compile dcs s = do
     drawcalls <- liftIO $ sequence dcs -- IO only for SNMap
     (maxUnis,
      maxSamplers,
+     maxGUnis,
+     maxGSamplers,
      maxVUnis,
      maxVSamplers,
      maxFUnis,
      maxFSamplers) <- liftNonWinContextIO $ do
                        maxUnis <- alloca (\ptr -> glGetIntegerv GL_MAX_COMBINED_UNIFORM_BLOCKS ptr >> peek ptr)
                        maxSamplers <- alloca (\ptr -> glGetIntegerv GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS ptr >> peek ptr)
+                       maxGUnis <- alloca (\ptr -> glGetIntegerv GL_MAX_GEOMETRY_UNIFORM_BLOCKS ptr >> peek ptr)
+                       maxGSamplers <- alloca (\ptr -> glGetIntegerv GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS ptr >> peek ptr)
                        maxVUnis <- alloca (\ptr -> glGetIntegerv GL_MAX_VERTEX_UNIFORM_BLOCKS ptr >> peek ptr)
                        maxVSamplers <- alloca (\ptr -> glGetIntegerv GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS ptr >> peek ptr)
                        maxFUnis <- alloca (\ptr -> glGetIntegerv GL_MAX_FRAGMENT_UNIFORM_BLOCKS ptr >> peek ptr)
@@ -86,21 +96,27 @@ compile dcs s = do
                        return
                         (fromIntegral maxUnis,
                          fromIntegral maxSamplers,
+                         fromIntegral maxGUnis,
+                         fromIntegral maxGSamplers,
                          fromIntegral maxVUnis,
                          fromIntegral maxVSamplers,
                          fromIntegral maxFUnis,
                          fromIntegral maxFSamplers)
 
-    let vUnisPerDc = map usedVUniforms drawcalls
+    let gUnisPerDc = map usedGUniforms drawcalls
+        gSampsPerDc = map usedGSamplers drawcalls
+        vUnisPerDc = map usedVUniforms drawcalls
         vSampsPerDc = map usedVSamplers drawcalls
         fUnisPerDc = map usedFUniforms drawcalls
         fSampsPerDc = map usedFSamplers drawcalls
-        unisPerDc = zipWith orderedUnion vUnisPerDc fUnisPerDc
-        sampsPerDc = zipWith orderedUnion vSampsPerDc fSampsPerDc
+        unisPerDc = zipWith orderedUnion (zipWith orderedUnion gUnisPerDc vUnisPerDc) fUnisPerDc
+        sampsPerDc = zipWith orderedUnion (zipWith orderedUnion gSampsPerDc vSampsPerDc) fSampsPerDc
 
         limitErrors = concat [
             ["Too many uniform blocks used in a single shader program\n" | any (\ xs -> length xs >= maxUnis) unisPerDc],
             ["Too many textures used in a single shader program\n" | any (\ xs -> length xs >= maxSamplers) sampsPerDc],
+            ["Too many uniform blocks used in a single geometry shader\n" | any (\ xs -> length xs >= maxGUnis) gUnisPerDc],
+            ["Too many textures used in a single geometry shader\n" | any (\ xs -> length xs >= maxGSamplers) gSampsPerDc],
             ["Too many uniform blocks used in a single vertex shader\n" | any (\ xs -> length xs >= maxVUnis) vUnisPerDc],
             ["Too many textures used in a single vertex shader\n" | any (\ xs -> length xs >= maxVSamplers) vSampsPerDc],
             ["Too many uniform blocks used in a single fragment shader\n" | any (\ xs -> length xs >= maxFUnis) fUnisPerDc],
@@ -123,7 +139,7 @@ compile dcs s = do
             liftNonWinContextAsyncIO $ mapM_ (\(pNameRef, pStrUDeleter) -> readIORef pNameRef >>= glDeleteProgram >> pStrUDeleter) pnames
             liftIO $ throwIO $ GPipeException $ concat allErrs
  where
-    comp (Drawcall fboSetup primN rastN vsource fsource inps _ _ _ _ pstrUSize', unis, samps, ubinds, sbinds) = do
+    comp (Drawcall fboSetup primN rastN vsource ogsource fsource inps _ _ _ _ _ _ pstrUSize', unis, samps, ubinds, sbinds) = do
            let pstrUSize = if 0 `elem` unis then pstrUSize' else 0
            let uNameToRenderIOmap = uniformNameToRenderIO s
            pstrUBuf <- createUBuffer pstrUSize -- Create uniform buffer for primiveStream uniforms
@@ -132,17 +148,26 @@ compile dcs s = do
            ePname <- liftNonWinContextIO $ do
               vShader <- glCreateShader GL_VERTEX_SHADER
               mErrV <- compileShader vShader vsource
+              (ogShader, mErrG) <- case ogsource of
+                  Nothing -> return (Nothing, Nothing)
+                  Just gsource -> do
+                    gShader <- glCreateShader GL_GEOMETRY_SHADER
+                    mErrG <- compileShader gShader gsource
+                    return (Just gShader, mErrG)
               fShader <- glCreateShader GL_FRAGMENT_SHADER
               mErrF <- compileShader fShader fsource
-              if isNothing mErrV && isNothing mErrV
+              if isNothing mErrG && isNothing mErrV && isNothing mErrF
                 then do pName <- glCreateProgram
                         glAttachShader pName vShader
+                        whenJust' ogShader $ glAttachShader pName
                         glAttachShader pName fShader
                         mapM_ (\(name, ix) -> withCString ("in"++ show name) $ glBindAttribLocation pName ix) $ zip inps [0..]
                         mPErr <- linkProgram pName
                         glDetachShader pName vShader
+                        whenJust' ogShader $ glDetachShader pName
                         glDetachShader pName fShader
                         glDeleteShader vShader
+                        whenJust' ogShader $ glDeleteShader
                         glDeleteShader fShader
                         case mPErr of
                             Just errP -> do glDeleteProgram pName
@@ -150,9 +175,11 @@ compile dcs s = do
                                             return $ Left $ "Linking a GPU progam failed:\n" ++ errP ++ "\nVertex source:\n" ++ vsource ++ "\nFragment source:\n" ++ fsource
                             Nothing -> return $ Right pName
                 else do glDeleteShader vShader
+                        whenJust' ogShader $ glDeleteShader
                         glDeleteShader fShader
                         pStrUDeleter
                         let err = maybe "" (\e -> "A vertex shader compilation failed:\n" ++ e ++ "\nSource:\n" ++ vsource) mErrV
+                              ++ maybe "" (\e -> "A geometry shader compilation failed:\n" ++ e ++ "\nSource:\n" ++ fromJust ogsource) mErrG
                               ++ maybe "" (\e -> "A fragment shader compilation failed:\n" ++ e ++ "\nSource:\n" ++ fsource) mErrF
                         return $ Left err
            case ePname of
@@ -238,6 +265,9 @@ compile dcs s = do
                                                                             drawio)
 
     compileShader name source = do
+        liftIO $ putStrLn "--------------------------------------------------------------------------------"
+        liftIO $ putStrLn source
+        liftIO $ putStrLn "--------------------------------------------------------------------------------"
         withCStringLen source $ \ (ptr, len) ->
                                     with ptr $ \ pptr ->
                                         with (fromIntegral len) $ \ plen ->
@@ -306,3 +336,7 @@ getFBOerror = do status <- glCheckFramebufferStatus GL_DRAW_FRAMEBUFFER
                     GL_FRAMEBUFFER_COMPLETE -> Nothing
                     GL_FRAMEBUFFER_UNSUPPORTED -> Just "The combination of draw images (FBO) used in the render call is unsupported by this graphics driver\n"
                     _ -> error "GPipe internal FBO error"
+
+-- | A 'whenJust' that accepts a monoidal return value.
+whenJust' :: (Monad m, Monoid b) => Maybe a -> (a -> m b) -> m b
+whenJust' = flip $ maybe (return mempty)
