@@ -1,3 +1,11 @@
+This fork is an attempt to support geometry shader in the GPipe 2 library.
+It’s still a work in progress which compiles, but barely works.
+The best you can do for now is testing a basic shader production:
+
+``` bash
+stack exec playground
+```
+
 # GPipe 2
 
 This is the main repository for GPipe 2, a library which encapsulates OpenGL
