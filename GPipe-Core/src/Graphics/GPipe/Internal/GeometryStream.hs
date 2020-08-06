@@ -115,24 +115,31 @@ instance AnotherVertexInput a => GeometryInput TrianglesWithAdjacency a where
 
 ------------------------------------------------------------------------------------------------------------------------------------
 
-makeAnotherVertex :: String -> SType -> ((S c a) -> ExprM String) -> ToAnotherVertex (S c a) (S c a)
-makeAnotherVertex qual styp f = ToAnotherVertex $ Kleisli $ \ (i, x) -> do
+-- makeAnotherVertex :: String -> SType -> ((S c a) -> ExprM String) -> ToAnotherVertex (S c a) (S c a)
+makeAnotherVertex :: String -> SType -> (b -> ExprM String) -> (S c a -> b) -> ToAnotherVertex b b
+makeAnotherVertex qual styp f f' = ToAnotherVertex $ Kleisli $ \ (i, x) -> do
     (j, n) <- get
     let n' = if i == j then n else 0 -- reset when index change
     put (i, n'+1)
-    return $ S $ useGInput qual styp i n' $ f x
+    return $ f' $ S $ useGInput qual styp i n' $ f x
 
 instance AnotherVertexInput () where
     toAnotherVertex = arr (const ())
 
 instance AnotherVertexInput VFloat where
-    toAnotherVertex = makeAnotherVertex "" STypeFloat unS
+    toAnotherVertex = makeAnotherVertex "" STypeFloat unS id
+
+instance AnotherVertexInput FlatVFloat where
+    toAnotherVertex = makeAnotherVertex "flat" STypeFloat (unS . unFlat) Flat
+
+instance AnotherVertexInput NoPerspectiveVFloat where
+    toAnotherVertex = makeAnotherVertex "noperspective" STypeFloat (unS . unNPersp) NoPerspective
 
 instance AnotherVertexInput VInt where
-    toAnotherVertex = makeAnotherVertex "flat" STypeInt unS
+    toAnotherVertex = makeAnotherVertex "flat" STypeInt unS id
 
 instance AnotherVertexInput VWord where
-    toAnotherVertex = makeAnotherVertex "flat" STypeUInt unS
+    toAnotherVertex = makeAnotherVertex "flat" STypeUInt unS id
 
 instance AnotherVertexInput VBool where
     toAnotherVertex = proc b -> do
@@ -250,12 +257,6 @@ geometrize (PrimitiveStream xs) = Shader $ do
 
 ------------------------------------------------------------------------------------------------------------------------------------
 
-type G = V
-
-newtype GenerativeGeometry p a = GenerativeGeometry a
-
-type GGenerativeGeometry p a = S G (GenerativeGeometry p a)
-
 notMeantToBeRead = error "a generative geometry is inherently a write-only value"
 
 generativePoint :: FragmentInput a => GGenerativeGeometry Points a
@@ -292,28 +293,42 @@ class FragmentInput a => GeometryExplosive a where
 
 instance GeometryExplosive VFloat where
     exploseGeometry x n = do
-        let name = "truc" ++ show n
+        let name = "vgf" ++ show n
         x' <- unS x
+        tellAssignment' name x'
+        return (n + 1)
+
+instance GeometryExplosive FlatVFloat where
+    exploseGeometry x n = do
+        let name = "vgf" ++ show n
+        x' <- unS (unFlat x)
+        tellAssignment' name x'
+        return (n + 1)
+
+instance GeometryExplosive NoPerspectiveVFloat where
+    exploseGeometry x n = do
+        let name = "vgf" ++ show n
+        x' <- unS (unNPersp x)
         tellAssignment' name x'
         return (n + 1)
 
 instance GeometryExplosive VInt where
     exploseGeometry x n = do
-        let name = "truc" ++ show n
+        let name = "vgf" ++ show n
         x' <- unS x
         tellAssignment' name x'
         return (n + 1)
 
 instance GeometryExplosive VWord where
     exploseGeometry x n = do
-        let name = "truc" ++ show n
+        let name = "vgf" ++ show n
         x' <- unS x
         tellAssignment' name x'
         return (n + 1)
 
 instance GeometryExplosive VBool where
     exploseGeometry x n = do
-        let name = "truc" ++ show n
+        let name = "vgf" ++ show n
         x' <- unS x
         tellAssignment' name x'
         return (n + 1)
@@ -375,9 +390,10 @@ instance FragmentCreator a => FragmentInputFromGeometry Triangles a where
 
 generateAndRasterize :: forall p a s os f. (FragmentInputFromGeometry p a, PrimitiveTopology p)
         => (s -> (Side, ViewPort, DepthRange))
+        -> Int
         -> GeometryStream (GGenerativeGeometry p (VPos, a))
         -> Shader os s (FragmentStream (FragmentFormat a))
-generateAndRasterize sf (GeometryStream xs) = Shader $ do
+generateAndRasterize sf maxVertices (GeometryStream xs) = Shader $ do
         n <- getName
         modifyRenderIO (\s -> s { rasterizationNameToRenderIO = insert n io (rasterizationNameToRenderIO s) } )
         return (FragmentStream $ map (f n) xs)
@@ -387,7 +403,7 @@ generateAndRasterize sf (GeometryStream xs) = Shader $ do
         f n (x, GeometryStreamData a b) = (evalState (m x) 0, FragmentStreamData n (Just (return ())) (makePrims a x) b true)
 
         makePrims a x = do
-            declareGeometryLayout a (toLayoutOut (undefined :: p)) 3
+            declareGeometryLayout a (toLayoutOut (undefined :: p)) maxVertices
             x' <- unS x
             return ()
 
@@ -555,37 +571,37 @@ instance FragmentCreator VFloat where
     createFragment = do
         n <- get
         put (n + 1)
-        return $ S (return $ show (100 + n))
+        return $ S (return $ show n)
 
 instance FragmentCreator FlatVFloat where
     createFragment = do
         n <- get
         put (n + 1)
-        return $ Flat $ S (return $ show (100 + n))
+        return $ Flat $ S (return $ show n)
 
 instance FragmentCreator NoPerspectiveVFloat where
     createFragment = do
         n <- get
         put (n + 1)
-        return $ NoPerspective $ S (return $ show (100 + n))
+        return $ NoPerspective $ S (return $ show n)
 
 instance FragmentCreator VInt where
     createFragment = do
         n <- get
         put (n + 1)
-        return $ S (return $ show (100 + n))
+        return $ S (return $ show n)
 
 instance FragmentCreator VWord where
     createFragment = do
         n <- get
         put (n + 1)
-        return $ S (return $ show (100 + n))
+        return $ S (return $ show n)
 
 instance FragmentCreator VBool where
     createFragment = do
         n <- get
         put (n + 1)
-        return $ S (return $ show (100 + n))
+        return $ S (return $ show n)
 
 instance (FragmentCreator a) => FragmentCreator (V0 a) where
     createFragment = return V0

@@ -1,3 +1,3 @@
 import Graphics.GPipe.Internal.Test
 
-main = exploreIt2
+main = exploreIt3

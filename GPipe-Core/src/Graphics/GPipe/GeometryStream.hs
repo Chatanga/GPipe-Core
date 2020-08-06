@@ -1,13 +1,15 @@
 module Graphics.GPipe.GeometryStream (
     -- * The data type
     GeometryStream(),
-    GenerativeGeometry(..),
 
     -- * Creating GeometryStream
     geometrize,
     generateAndRasterize,
 
     -- * Various GeometryStream operations   
+    generativePoint,
+    generativeLineStrip,
+    generativeTriangleStrip,
     emitVertex,
     endPrimitive,
 )

@@ -170,9 +170,58 @@ exploreIt2 = do
                     & endPrimitive
                 expandedGeometries :: GeometryStream (GGenerativeGeometry Triangles (VPos, V3 VFloat)) = makePrimitive generativeTriangleStrip <$> geometries 
 
-            frags :: FragmentStream (FragmentFormat (V3 VFloat)) <- generateAndRasterize rasterOptions expandedGeometries
+            frags :: FragmentStream (FragmentFormat (V3 VFloat)) <- generateAndRasterize rasterOptions 3 expandedGeometries
             
             -- frags :: FragmentStream (FragmentFormat (V3 VFloat)) <- rasterize rasterOptions projectedVertices
+
+            let fragsWithDepth :: FragmentStream (FragColor RGBFloat, FragDepth) = withRasterizedInfo (\(V3 r g b) info -> ((V3 b g r) * 2, getZ (rasterizedFragCoord info))) frags
+
+            let colorOption = ContextColorOption NoBlending (pure True)
+                depthOption = DepthOption Less True
+
+            drawWindowColorDepth (const (window, colorOption, depthOption)) fragsWithDepth
+
+        return ()
+
+exploreIt3 :: IO ()
+exploreIt3 = do
+    hSetBuffering stdout NoBuffering
+    runContextT MyContextHandlerParameters $ do
+
+        window :: Window os RGBFloat Depth <- newWindow (WindowFormatColorDepth SRGB8 Depth16) MockWindowParameters
+
+        uniform :: Buffer os (Uniform (V4 (B4 Float))) <- newBuffer 1
+
+        -- Create the shader
+        shader :: CompiledShader os ShaderEnvironment <- compileShader $ do
+
+            vertices :: PrimitiveStream Triangles (V3 VFloat) <- fmap (\(V2 x y) -> (V3 x y 1)) <$> toPrimitiveStream primitives
+            modelViewProj :: V4 (V4 VFloat) <- getUniform (const (uniform, 0))
+            let projectedVertices :: PrimitiveStream Triangles VPos = (\(V3 px py pz) -> modelViewProj !* V4 px py pz 1) <$> vertices
+
+            geometries :: GeometryStream (Geometry Triangles VPos) <- geometrize projectedVertices
+            let
+                makePrimitive :: Int -> Geometry Triangles VPos -> GGenerativeGeometry Triangles (VPos, V3 VFloat) -> GGenerativeGeometry Triangles (VPos, V3 VFloat)
+                makePrimitive depth (Triangle p1 p2 p3) g =
+                    let depth' = depth - 1
+                        p12 = (p1 + p2) / 2
+                        p23 = (p2 + p3) / 2
+                        p31 = (p3 + p1) / 2
+                    in  if depth >* 0
+                        then (g
+                            & makePrimitive depth' (Triangle p1 p12 p31)
+                            & makePrimitive depth' (Triangle p12 p2 p23)
+                            & makePrimitive depth' (Triangle p31 p23 p3)
+                            & makePrimitive depth' (Triangle p12 p23 p31))
+                        else (g
+                            & emitVertex (p1, V3 1 0 0)
+                            & emitVertex (p2, V3 0 1 0)
+                            & emitVertex (p3, V3 0 0 1)
+                            & endPrimitive)
+                depth = 1
+                expandedGeometries :: GeometryStream (GGenerativeGeometry Triangles (VPos, V3 VFloat)) = (\t -> makePrimitive depth t generativeTriangleStrip) <$> geometries 
+
+            frags :: FragmentStream (FragmentFormat (V3 VFloat)) <- generateAndRasterize rasterOptions (3 * 4 ^ depth) expandedGeometries
 
             let fragsWithDepth :: FragmentStream (FragColor RGBFloat, FragDepth) = withRasterizedInfo (\(V3 r g b) info -> ((V3 b g r) * 2, getZ (rasterizedFragCoord info))) frags
 

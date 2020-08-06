@@ -1,10 +1,9 @@
+_Preamble_
+
 This fork is an attempt to support geometry shader in the GPipe 2 library.
 It’s still a work in progress which compiles, but barely works.
-The best you can do for now is testing a basic shader production:
-
-``` bash
-stack exec playground
-```
+I’ve also forked the [GPipe-Test](https://github.com/Chatanga/GPipe-Test) project to
+test it.
 
 # GPipe 2
 

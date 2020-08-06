@@ -33,7 +33,7 @@ import Data.Word
 type NextTempVar = Int
 type NextGlobal = Int
 
-data SType = STypeFloat | STypeInt | STypeBool | STypeUInt | STypeDyn String | STypeMat Int Int | STypeVec Int | STypeIVec Int | STypeUVec Int
+data SType = STypeFloat | STypeInt | STypeBool | STypeUInt | STypeDyn String | STypeMat Int Int | STypeVec Int | STypeIVec Int | STypeUVec Int | STypeGenerativeGeometry
 
 stypeName :: SType -> String
 stypeName STypeFloat = "float"
@@ -155,6 +155,9 @@ data V
 -- | Phantom type used as first argument in @'S' 'F' a@ that denotes that the shader value is a fragment value
 data F
 
+type G = V
+newtype GenerativeGeometry p a = GenerativeGeometry a
+
 type VFloat = S V Float
 type VInt = S V Int
 type VWord = S V Word
@@ -164,6 +167,8 @@ type FFloat = S F Float
 type FInt = S F Int
 type FWord = S F Word
 type FBool = S F Bool
+
+type GGenerativeGeometry p a = S G (GenerativeGeometry p a)
 
 useVInput :: SType -> Int -> ExprM String
 useVInput stype i =
@@ -182,7 +187,7 @@ useGInput qual stype i n v =
                 T.lift $ put $ s { shaderUsedInput = Map.insert n (gDeclIn, (assignOutput, gDeclOut)) $ shaderUsedInput s }
                 return $ prefix ++ show n ++ "[" ++ show i ++ "]"
     where
-        prefix = "v_pouet_f"
+        prefix = "vg"
 
         -- Output assignement in the previous shader
         assignOutput = do val <- v
@@ -209,7 +214,7 @@ useFInputFromG qual stype i v =
                 T.lift $ put $ s { shaderUsedInput = Map.insert i (gDecl val (qual ++ " in "), (return (), gDecl val (qual ++ " out "))) $ shaderUsedInput s }
                 return $ prefix ++ show val
     where
-        prefix = "truc"
+        prefix = "vgf"
 
         gDecl val s = do
             tellGlobal s
@@ -238,8 +243,7 @@ declareGeometryLayout inputPrimitive outputPrimitive maxVertices = T.lift $ modi
     where
         gDeclBlock = do
             tellGlobalLn $ "layout(" ++ inputPrimitive ++ ") in"
-            tellGlobalLn $ "layout(" ++ outputPrimitive ++ ") out"
-            tellGlobalLn $ "layout(max_vertices = " ++ show maxVertices ++ ") in"
+            tellGlobalLn $ "layout(" ++ outputPrimitive ++ ", max_vertices = " ++ show maxVertices ++ ") out"
 
 useUniform :: GlobDeclM () -> Int -> Int -> ExprM String
 useUniform decls blockI offset =
@@ -308,6 +312,7 @@ data ShaderBase a x where
     ShaderBaseBool :: S x Bool -> ShaderBase (S x Bool) x
     ShaderBaseUnit :: ShaderBase () x
     ShaderBaseProd :: ShaderBase a x -> ShaderBase b x -> ShaderBase (a,b) x
+    ShaderBaseGenerativeGeometry :: S x (GenerativeGeometry p a) -> ShaderBase (S x (GenerativeGeometry p a)) x
 
 shaderbaseDeclare :: ShaderBase a x -> WriterT [String] ExprM (ShaderBase a x)
 shaderbaseAssign :: ShaderBase a x -> StateT [String] ExprM ()
@@ -321,6 +326,7 @@ shaderbaseDeclare ShaderBaseUnit = return ShaderBaseUnit
 shaderbaseDeclare (ShaderBaseProd a b) = do a' <- shaderbaseDeclare a
                                             b' <- shaderbaseDeclare b
                                             return $ ShaderBaseProd a' b'
+shaderbaseDeclare (ShaderBaseGenerativeGeometry _) = ShaderBaseGenerativeGeometry <$> shaderbaseDeclareDef STypeGenerativeGeometry
 
 shaderbaseAssign (ShaderBaseFloat a) = shaderbaseAssignDef a
 shaderbaseAssign (ShaderBaseInt a) = shaderbaseAssignDef a
@@ -329,6 +335,7 @@ shaderbaseAssign (ShaderBaseBool a) = shaderbaseAssignDef a
 shaderbaseAssign ShaderBaseUnit = return ()
 shaderbaseAssign (ShaderBaseProd a b) = do shaderbaseAssign a
                                            shaderbaseAssign b
+shaderbaseAssign (ShaderBaseGenerativeGeometry a) = shaderbaseAssignDef a
 
 shaderbaseReturn (ShaderBaseFloat _) = ShaderBaseFloat <$> shaderbaseReturnDef
 shaderbaseReturn (ShaderBaseInt _) = ShaderBaseInt <$> shaderbaseReturnDef
@@ -338,6 +345,7 @@ shaderbaseReturn ShaderBaseUnit = return ShaderBaseUnit
 shaderbaseReturn (ShaderBaseProd a b) = do a' <- shaderbaseReturn a
                                            b' <- shaderbaseReturn b
                                            return $ ShaderBaseProd a' b'
+shaderbaseReturn (ShaderBaseGenerativeGeometry _) = ShaderBaseGenerativeGeometry <$> shaderbaseReturnDef
 
 shaderbaseDeclareDef :: SType -> WriterT [String] ExprM (S x a)
 shaderbaseDeclareDef styp = do var <- T.lift $ T.lift $ T.lift $ T.lift getNext
@@ -392,6 +400,11 @@ instance ShaderType () x where
     type ShaderBaseType () = ()
     toBase _ _ = ShaderBaseUnit
     fromBase _ ShaderBaseUnit = ()
+
+instance ShaderType (S x (GenerativeGeometry p a)) x where
+    type ShaderBaseType (S x (GenerativeGeometry p a)) = (S x (GenerativeGeometry p a))
+    toBase _ = ShaderBaseGenerativeGeometry
+    fromBase _ (ShaderBaseGenerativeGeometry a) = a
 
 instance ShaderType a x => ShaderType (V0 a) x where
     type ShaderBaseType (V0 a) = ()
@@ -710,6 +723,7 @@ instance IfB (S a Float) where ifB = ifThenElse'
 instance IfB (S a Int) where ifB = ifThenElse'
 instance IfB (S a Word) where ifB = ifThenElse'
 instance IfB (S a Bool) where ifB = ifThenElse'
+instance IfB (S a (GenerativeGeometry p b)) where ifB = ifThenElse'
 
 instance Conjugate (S a Float)
 instance Conjugate (S a Int)
