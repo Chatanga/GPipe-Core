@@ -62,6 +62,7 @@ library
                     Graphics.GPipe.Internal.Uniform,
                     Graphics.GPipe.Internal.Orphans
 
+-- Doesn't depend on the internal library but rebuild everything by stubbing the GL part.
 executable playground
   main-is:          Main.hs
   -- ghc-options:      -ddump-simpl-stats

@@ -101,6 +101,8 @@ instance ContextHandler MyContext where
     -- contextDelete :: ctx -> ContextWindow ctx -> IO ()
     contextDelete _ _ = return ()
 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 data ShaderEnvironment = ShaderEnvironment
     {   primitives :: PrimitiveArray Triangles (B2 Float)
     ,   rasterOptions :: (Side, ViewPort, DepthRange)
@@ -258,8 +260,7 @@ testIt2 = do
 
 -- ifThenElse :: forall a b x. (ShaderType a x, ShaderType b x) => S x Bool -> (a -> b) -> (a -> b) -> a -> b
 
-playWithIt :: IO ()
-playWithIt = do
+testIt3 = do
     let
         ToVertex _ (Kleisli mf) _ = toVertex :: ToVertex (B2 Float) (VertexFormat (B2 Float))
         (V2 x y, (n, uSize, offToStype)) = runReader
