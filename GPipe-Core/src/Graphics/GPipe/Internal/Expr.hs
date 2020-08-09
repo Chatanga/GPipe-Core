@@ -45,6 +45,7 @@ stypeName (STypeMat r c) = "mat" ++ show c ++ 'x' : show r
 stypeName (STypeVec n) = "vec" ++ show n
 stypeName (STypeIVec n) = "ivec" ++ show n
 stypeName (STypeUVec n) = "uvec" ++ show n
+stypeName STypeGenerativeGeometry = "bool" -- A generative geometry is inherently a write-only value. The 'bool' type is simply here as a crude workaround (hardly a solution).
 
 stypeSize :: SType -> Int
 stypeSize (STypeVec n) = n * 4

@@ -257,7 +257,7 @@ geometrize (PrimitiveStream xs) = Shader $ do
 
 ------------------------------------------------------------------------------------------------------------------------------------
 
-notMeantToBeRead = error "a generative geometry is inherently a write-only value"
+notMeantToBeRead = "false" -- error "a generative geometry is inherently a write-only value"
 
 generativePoint :: FragmentInput a => GGenerativeGeometry Points a
 generativePoint = S $ return notMeantToBeRead
