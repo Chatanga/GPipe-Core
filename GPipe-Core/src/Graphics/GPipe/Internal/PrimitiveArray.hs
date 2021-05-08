@@ -93,6 +93,7 @@ dropIndices n i = i{ indexArrayLength = l - n', offset = offset i + n' }
         l = indexArrayLength i
         n' = min (max n 0) l
 
+-- data Void = Void -- Do we need to introduce that?
 data Points = PointList
 data Lines = LineLoop | LineStrip | LineList
 data LinesWithAdjacency = LineListAdjacency | LineStripAdjacency

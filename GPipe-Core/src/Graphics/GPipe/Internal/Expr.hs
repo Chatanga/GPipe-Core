@@ -1,40 +1,66 @@
-{-# LANGUAGE GADTs, EmptyDataDecls, NoMonomorphismRestriction, TypeFamilies, ScopedTypeVariables, FlexibleInstances, RankNTypes, MultiParamTypeClasses, FlexibleContexts, OverloadedStrings #-}
+{-# LANGUAGE GADTs, TypeFamilies, ScopedTypeVariables, FlexibleInstances, MultiParamTypeClasses #-}
 
 module Graphics.GPipe.Internal.Expr where
 
 import Prelude hiding ((.), id, (<*))
+
+-- base
+import Control.Applicative hiding ((<*))
 import Control.Category
-import Control.Monad (void, when)
-import Control.Monad.Trans.Writer
-import Control.Monad.Trans.State
-import Control.Monad.Trans.Reader
+import Control.Monad
+import Data.Bits
+import Data.Foldable
+import Data.Int
+import Data.List
 import Data.Maybe
-import Data.Monoid (mconcat, mappend)
-import qualified Control.Monad.Trans.Class as T (lift)
-import Data.SNMap
+import Data.Monoid
+import Data.Word
+
+-- containers
 import qualified Data.IntMap as Map
+
+-- transformers
+import qualified Control.Monad.Trans.Class as T (lift)
+import Control.Monad.Trans.Reader
+import Control.Monad.Trans.State
+import Control.Monad.Trans.Writer
+
+-- Boolean
 import Data.Boolean
-import Data.List (intercalate)
-import Control.Applicative (liftA, liftA2, liftA3)
+
+-- linear
+import Linear.Affine
+import Linear.Conjugate
+import Linear.Metric
+import Linear.Matrix
 import Linear.V4
 import Linear.V3
 import Linear.V2
 import Linear.V1
 import Linear.V0
-import Linear.Affine
-import Linear.Metric
-import Linear.Matrix
 import Linear.Vector
-import Linear.Conjugate
-import Data.Foldable (Foldable(toList))
-import Data.Int
-import Data.Word
-import Data.Bits -- (FiniteBits(finiteBitSize))
+
+-- .
+import Data.SNMap
+
+import Graphics.GPipe.Internal.Debug
+
+-- ***
 
 type NextTempVar = Int
 type NextGlobal = Int
 
-data SType = STypeFloat | STypeInt | STypeBool | STypeUInt | STypeDyn String | STypeMat Int Int | STypeVec Int | STypeIVec Int | STypeUVec Int | STypeGenerativeGeometry
+data SType
+    = STypeFloat
+    | STypeInt
+    | STypeBool
+    | STypeUInt
+    | STypeDyn String
+    | STypeMat Int Int
+    | STypeVec Int
+    | STypeIVec Int
+    | STypeUVec Int
+    | STypeGenerativeGeometry
 
 stypeName :: SType -> String
 stypeName STypeFloat = "float"
@@ -46,7 +72,7 @@ stypeName (STypeMat r c) = "mat" ++ show c ++ 'x' : show r
 stypeName (STypeVec n) = "vec" ++ show n
 stypeName (STypeIVec n) = "ivec" ++ show n
 stypeName (STypeUVec n) = "uvec" ++ show n
-stypeName STypeGenerativeGeometry = "bool" -- A generative geometry is inherently a write-only value. The 'bool' type is simply here as a crude workaround (hardly a solution).
+stypeName STypeGenerativeGeometry = "bool" -- A generative geometry is inherently a write-only value. The 'bool' type is simply here as a crude workaround.
 
 stypeSize :: SType -> Int
 stypeSize (STypeVec n) = n * 4
@@ -54,22 +80,24 @@ stypeSize (STypeIVec n) = n * 4
 stypeSize (STypeUVec n) = n * 4
 stypeSize _ = 4
 
--- A functional shader expression.
+-- A shader expression, that is a shader fragment which could be combined with others to generate a complete shader.
+-- They could associated with static type information inside a 'S' (see below) to regulate how they are combined.
 type ExprM = SNMapReaderT
     [String] -- Cached GLSL source code.
     (StateT
-        ExprState -- Shader inputs.
+        ExprState -- Shader context (<=> lexical closure?).
         (WriterT
             String -- Generated GLSL source code.
             (StateT
                 NextTempVar -- Next unique variable name.
-                IO -- IO to create stable names.
+                IO -- IO to create stable names (see SNMap).
             )
         )
     )
 
 type GlobDeclM = Writer String
 
+-- Context for an ExprM.
 data ExprState = ExprState
     {   shaderUsedUniformBlocks :: Map.IntMap (GlobDeclM ())
     ,   shaderUsedSamplers :: Map.IntMap (GlobDeclM ())
@@ -82,7 +110,8 @@ data ExprState = ExprState
     ,   shaderGeometry :: Maybe (GlobDeclM ()) -- Input/ouput layout declarations for current shader (if it is a geometry shader).
     }
 
-{- Rough idea:
+{-
+    Rough idea:
 
     makeDrawcall (sh, shd, _) =
         do  (fsource, funis, fsamps, _, prevDecls1, prevS1) <- runExprM shd sh
@@ -99,33 +128,33 @@ data ExprState = ExprState
     arrow with the side effect of outputting the shader source.
 -}
 runExprM
-    :: GlobDeclM () -- output declarations to include in this shader
+    :: GlobDeclM () -- Input declarations to include in this shader
     -> ExprM () -- expression to construct in this shader (including assignements to the output variables)
     -> IO
         ( String -- Shader source produced.
         , [Int] -- Uniforms used in this shader.
         , [Int] -- Samplers used in this shader.
-        , [Int] -- Inputs used in this shader (only varying or uniforms too?).
-        , GlobDeclM () -- Output declarations required in the previous shader (how it differs from the inputs used?).
+        , [Int] -- Varying inputs used in this shader.
+        , GlobDeclM () -- Output declarations required in the previous shader.
         , ExprM () -- Expression to construct in the previous shader.
         )
-runExprM d m = do
-    (st, body) <- evalStateT (runWriterT (execStateT (runSNMapReaderT m) (ExprState Map.empty Map.empty Map.empty Nothing))) 0
-    let (unis, uniDecls) = unzip $ Map.toAscList (shaderUsedUniformBlocks st)
-        (samps, sampDecls) = unzip $ Map.toAscList (shaderUsedSamplers st)
-        (inps, inpDescs) = unzip $ Map.toAscList (shaderUsedInput st)
-        geoDescs = shaderGeometry st
+runExprM decls expr = do
+    (exprState, body) <- evalStateT (runWriterT (execStateT (runSNMapReaderT expr) (ExprState Map.empty Map.empty Map.empty Nothing))) 0
+    let geoDescs = shaderGeometry exprState
+        (unis, uniDecls) = unzip . Map.toAscList $ shaderUsedUniformBlocks exprState
+        (samps, sampDecls) = unzip . Map.toAscList $ shaderUsedSamplers exprState
+        (inps, inpDescs) = unzip . Map.toAscList $ shaderUsedInput exprState
         (inpDecls, prevDesc) = unzip inpDescs
         (prevSs, prevDecls) = unzip prevDesc
-        decls = do
-            d
+        decls' = do
+            decls
             when (isJust geoDescs) (fromJust geoDescs)
             sequence_ uniDecls
             sequence_ sampDecls
             sequence_ inpDecls
-        source = mconcat
+        source = concat
             [ "#version 450\n"
-            , execWriter decls
+            , execWriter decls'
             , "void main() {\n"
             , body
             , "}\n"
@@ -137,7 +166,7 @@ runExprM d m = do
 --------------------------------------------------------------------------------
 
 data ShaderStageInput = ShaderStageInput
-    {    -- The output declarations to include in the shader's source.
+    {   -- The output declarations to include in the shader's source.
         outputDeclarations :: GlobDeclM ()
         -- The expression to evaluate as a source using variables to be provided
         -- by a previous shader (or buffer object). The top level of this
@@ -162,9 +191,14 @@ evaluateExpression staticExpressions expression requiredOutputDeclarations = do
         (se:ses) -> evaluateExpression ses (pe >> se) pds
         [] -> return $ ShaderStageOutput s u ss is pds pe
 
---------------------------------------------------------------------------------
+-- ***
 
+-- Associate a shader expression (returning a name) with a type information.
 newtype S x a = S { unS :: ExprM String }
+
+type RValue = String
+
+-- Type any expression producing a value.
 
 scalarS :: SType -> ExprM RValue -> S c a
 scalarS typ = S . tellAssignment typ
@@ -183,6 +217,8 @@ vec4S typ s =
         f p = S $ fmap (++ p) m
     in  V4 (f ".x") (f ".y") (f ".z") (f ".w")
 
+-- Type a atomic value (could be built-in value, a literal...).
+
 scalarS' :: RValue -> S c a
 scalarS' = S . return
 
@@ -192,6 +228,8 @@ vec3S' :: RValue -> V3 (S c a)
 vec3S' = vec3S'' . S . return
 vec4S' :: RValue -> V4 (S c a)
 vec4S' = vec4S'' . S . return
+
+-- Type a complex non-atomic expression (a "real" shader expression such as "p * n", not a ExprM).
 
 vec2S'' :: S c a -> V2 (S c a)
 vec2S'' s =
@@ -206,13 +244,15 @@ vec4S'' s =
     let f p = S $ fmap (++ ('[': show (p :: Int) ++"]")) (unS s)
     in  V4 (f 0) (f 1) (f 2) (f 3)
 
+--  ***
+
 -- | Phantom type used as first argument in @'S' 'V' a@ that denotes that the shader value is a vertex value
 data V
 
 -- | Phantom type used as first argument in @'S' 'F' a@ that denotes that the shader value is a fragment value
 data F
 
--- | We reuse V for geometry shader, which simplify things and makes sense save the GenerativeGeometry…
+-- | We reuse V for geometry shader, which simplify things and makes sense for the geometry stage.
 type G = V
 newtype GenerativeGeometry p a = GenerativeGeometry a
 
@@ -227,6 +267,8 @@ type FFloat = S F Float
 type FInt = S F Int
 type FWord = S F Word
 type FBool = S F Bool
+
+-- ***
 
 useVInput :: SType -> Int -> ExprM String
 useVInput stype i = do
@@ -267,7 +309,7 @@ useGInput qual stype i n v = do
             tellGlobal $ stypeName stype
             tellGlobal $ ' ':prefix
             tellGlobal $ show n
-            tellGlobalLn $ "[]"
+            tellGlobalLn "[]"
 
 useFInputFromG :: String -> SType -> Int -> ExprM String -> ExprM String
 useFInputFromG qual stype i v = do
@@ -335,14 +377,6 @@ useSampler prefix str name = do
             tellGlobal " s"
             tellGlobalLn $ show name
 
-getNext :: Monad m => StateT Int m Int
-getNext = do
-    s <- get
-    put $ s + 1
-    return s
-
-type RValue = String
-
 tellAssignment :: SType -> ExprM RValue -> ExprM String
 tellAssignment typ m = fmap head . memoizeM $ do
     val <- m
@@ -360,17 +394,22 @@ discard (S m) = do
     b <- m
     when (b /= "true") $ T.lift $ T.lift $ tell $ mconcat ["if (!(", b, ")) discard;\n"]
 
---
+getNext :: Monad m => StateT Int m Int
+getNext = do
+    s <- get
+    put $ s + 1
+    return s
+
 tellGlobalLn :: String -> GlobDeclM ()
 tellGlobalLn string = tell $ string `mappend` ";\n"
---
+
 tellGlobal :: String -> GlobDeclM ()
 tellGlobal = tell
 
------------------------
+-- ***
 
 -- | An opaque type
-data ShaderBase a x where
+data ShaderBase a x where -- A GADT kept opaque in the API.
     ShaderBaseFloat :: S x Float -> ShaderBase (S x Float) x
     ShaderBaseInt :: S x Int -> ShaderBase (S x Int) x
     ShaderBaseWord :: S x Word -> ShaderBase (S x Word) x
@@ -381,6 +420,7 @@ data ShaderBase a x where
 
 shaderbaseDeclare :: ShaderBase a x -> WriterT [String] ExprM (ShaderBase a x)
 shaderbaseAssign :: ShaderBase a x -> StateT [String] ExprM ()
+shaderbaseAssignWithLateAssignment :: ShaderBase a x -> StateT [String] ExprM (ExprM ())
 shaderbaseReturn :: ShaderBase a x -> ReaderT (ExprM [String]) (State Int) (ShaderBase a x)
 
 shaderbaseDeclare (ShaderBaseFloat _) = ShaderBaseFloat <$> shaderbaseDeclareDef STypeFloat
@@ -400,9 +440,22 @@ shaderbaseAssign (ShaderBaseWord a) = shaderbaseAssignDef a
 shaderbaseAssign (ShaderBaseBool a) = shaderbaseAssignDef a
 shaderbaseAssign ShaderBaseUnit = return ()
 shaderbaseAssign (ShaderBaseProd a b) = do
-    shaderbaseAssign a
-    shaderbaseAssign b
+    a' <- shaderbaseAssignWithLateAssignment a
+    b' <- shaderbaseAssignWithLateAssignment b
+    T.lift a'
+    T.lift b'
 shaderbaseAssign (ShaderBaseGenerativeGeometry a) = shaderbaseAssignDef a
+
+shaderbaseAssignWithLateAssignment (ShaderBaseFloat a) = shaderbaseAssignDef' a
+shaderbaseAssignWithLateAssignment (ShaderBaseInt a) = shaderbaseAssignDef' a
+shaderbaseAssignWithLateAssignment (ShaderBaseWord a) = shaderbaseAssignDef' a
+shaderbaseAssignWithLateAssignment (ShaderBaseBool a) = shaderbaseAssignDef' a
+shaderbaseAssignWithLateAssignment ShaderBaseUnit = return (return ())
+shaderbaseAssignWithLateAssignment (ShaderBaseProd a b) = do
+    a' <- shaderbaseAssignWithLateAssignment a
+    b' <- shaderbaseAssignWithLateAssignment b
+    return (a' >> b')
+shaderbaseAssignWithLateAssignment (ShaderBaseGenerativeGeometry a) = shaderbaseAssignDef' a
 
 shaderbaseReturn (ShaderBaseFloat _) = ShaderBaseFloat <$> shaderbaseReturnDef
 shaderbaseReturn (ShaderBaseInt _) = ShaderBaseInt <$> shaderbaseReturnDef
@@ -423,22 +476,28 @@ shaderbaseDeclareDef styp = do
     tell [root]
     return $ S $ return root
 
-shaderbaseAssignDef :: (S x a) -> StateT [String] ExprM ()
+shaderbaseAssignDef :: S x a -> StateT [String] ExprM ()
 shaderbaseAssignDef (S shaderM) = do
     ul <- T.lift shaderM
     xs <- get
     put $ tail xs
     T.lift $ tellAssignment' (head xs) ul
-    return ()
+
+shaderbaseAssignDef' :: S x a -> StateT [String] ExprM (ExprM ())
+shaderbaseAssignDef' (S shaderM) = do
+    ul <- T.lift shaderM
+    xs <- get
+    put $ tail xs
+    return (tellAssignment' (head xs) ul)
 
 shaderbaseReturnDef :: ReaderT (ExprM [String]) (State Int) (S x a)
 shaderbaseReturnDef = do
     i <- T.lift getNext
-    m <- ask
-    return $ S $ fmap (!!i) m
+    S . fmap (!! i) <$> ask
 
--- | Constraint for types that may pass in and out of shader control structures. Define your own instances in terms of others and make sure to
---   make toBase as lazy as possible.
+-- | Constraint for types that may pass in and out of shader control structures.
+-- Define your own instances in terms of others and make sure to
+-- make toBase as lazy as possible.
 class ShaderType a x where
     -- | A base type that this type can convert into. Use the 'ShaderBaseType' function on an existing instance of 'ShaderType' to define this in your instance.
     type ShaderBaseType a
@@ -532,8 +591,9 @@ ifThenElse' b t e = ifThenElse b (const t) (const e) ()
 
 -- | @ifThenElse c f g x@ will return @f x@ if @c@ evaluates to 'true' or @g x@ otherwise.
 --
---   In most cases functionally equivalent to 'ifThenElse'' but
---   usually generate smaller shader code since the last argument is not inlined into the two branches, which also would affect implicit derivates (e.g. 'dFdx', 'dFdy' or sampling using @SampleAuto@)
+-- In most cases functionally equivalent to 'ifThenElse'' but
+-- usually generate smaller shader code since the last argument is not inlined into the two branches,
+-- which also would affect implicit derivates (e.g. 'dFdx', 'dFdy' or sampling using @SampleAuto@)
 ifThenElse :: forall a b x. (ShaderType a x, ShaderType b x) => S x Bool -> (a -> b) -> (a -> b) -> a -> b
 ifThenElse c t e i = fromBase x $ ifThenElse_ c (toBase x . t . fromBase x) (toBase x . e . fromBase x) (toBase x i)
     where
@@ -560,13 +620,17 @@ ifThenElse c t e i = fromBase x $ ifThenElse_ c (toBase x . t . fromBase x) (toB
 
 -- | @ifThen c f x@ will return @f x@ if @c@ evaluates to 'true' or @x@ otherwise.
 --
---   In most cases functionally equivalent to 'ifThenElse'' but
---   usually generate smaller shader code since the last argument is not inlined into the two branches, which also would affect implicit derivates (e.g. 'dFdx', 'dFdy' or sampling using @SampleAuto@)
+-- In most cases functionally equivalent to 'ifThenElse'' but
+-- usually generate smaller shader code since the last argument is not inlined into the two branches,
+-- which also would affect implicit derivates (e.g. 'dFdx', 'dFdy' or sampling using @SampleAuto@)
 ifThen :: forall a x. (ShaderType a x) => S x Bool -> (a -> a) -> a -> a
 ifThen c t i = fromBase x $ ifThen_ c (toBase x . t . fromBase x) (toBase x i)
     where
         x = undefined :: x
-        ifThen_ :: S x Bool -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x) -> ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x
+        ifThen_
+            :: S x Bool
+            -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x)
+            ->  ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x
         ifThen_ bool thn a =
             let ifM = memoizeM $ do
                     boolStr <- unS bool
@@ -586,7 +650,10 @@ while :: forall a x. (ShaderType a x) => (a -> S x Bool) -> (a -> a) -> a -> a
 while c f i = fromBase x $ while_ (c . fromBase x) (toBase x . f . fromBase x) (toBase x i)
     where
         x = undefined :: x
-        while_ :: (ShaderBase (ShaderBaseType a) x -> S x Bool) -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x) -> ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x
+        while_
+            :: (ShaderBase (ShaderBaseType a) x -> S x Bool)
+            -> (ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x)
+            ->  ShaderBase (ShaderBaseType a) x -> ShaderBase (ShaderBaseType a) x
         while_ bool loopF a =
             let whileM = memoizeM $ do
                     (lifted, decls) <- runWriterT $ shaderbaseDeclare (toBase x (errShaderType :: a))
@@ -594,53 +661,64 @@ while c f i = fromBase x $ while_ (c . fromBase x) (toBase x . f . fromBase x) (
                     boolDecl <- tellAssignment STypeBool (unS $ bool a)
                     T.lift $ T.lift $ tell $ mconcat ["while(", boolDecl, "){\n" ]
                     let looped = loopF lifted
+
                     scopedM $ do
+                        -- Reassigning back to the same var (in decls) breaks the functional referential transparency if not handled carefully.
                         void $ evalStateT (shaderbaseAssign looped) decls
                         loopedBoolStr <- unS $ bool looped
                         tellAssignment' boolDecl loopedBoolStr
+
                     T.lift $ T.lift $ tell "}\n"
                     return decls
             in  evalState (runReaderT (shaderbaseReturn (toBase x (errShaderType :: a))) whileM) 0
 
 errShaderType = error "toBase in an instance of ShaderType is not lazy enough! Make sure you use tilde (~) for each pattern match on a data constructor."
 
---------------------------------------------------------------------------------------------------------------------------------
+-- ***
 
+-- Operators to create complex shader expressions (as in "arithmetic" expression, not ExprM, even if bigger ExprM are created this way).
 
 bin :: SType -> String -> S c x -> S c y -> S c z
-bin typ o (S a) (S b) = S $ tellAssignment typ $ do a' <- a
-                                                    b' <- b
-                                                    return $ '(' : a' ++ o ++ b' ++ ")"
+bin typ o (S a) (S b) = S $ tellAssignment typ $ do
+    a' <- a
+    b' <- b
+    return $ '(' : a' ++ o ++ b' ++ ")"
 
 fun1 :: SType -> String -> S c x -> S c y
-fun1 typ f (S a) = S $ tellAssignment typ $ do a' <- a
-                                               return $ f ++ '(' : a' ++ ")"
+fun1 typ f (S a) = S $ tellAssignment typ $ do
+    a' <- a
+    return $ f ++ '(' : a' ++ ")"
 
 fun2 :: SType -> String -> S c x -> S c y -> S c z
-fun2 typ f (S a) (S b) = S $ tellAssignment typ $ do a' <- a
-                                                     b' <- b
-                                                     return $ f ++ '(' : a' ++ ',' : b' ++ ")"
+fun2 typ f (S a) (S b) = S $ tellAssignment typ $ do
+    a' <- a
+    b' <- b
+    return $ f ++ '(' : a' ++ ',' : b' ++ ")"
 
 fun3 :: SType -> String -> S c x -> S c y -> S c z -> S c w
-fun3 typ f (S a) (S b) (S c) = S $ tellAssignment typ $ do a' <- a
-                                                           b' <- b
-                                                           c' <- c
-                                                           return $ f ++ '(' : a' ++ ',' : b' ++ ',' : c' ++")"
+fun3 typ f (S a) (S b) (S c) = S $ tellAssignment typ $ do
+    a' <- a
+    b' <- b
+    c' <- c
+    return $ f ++ '(' : a' ++ ',' : b' ++ ',' : c' ++")"
 
 fun4 :: SType -> String -> S c x -> S c y -> S c z -> S c w -> S c r
-fun4 typ f (S a) (S b) (S c) (S d) = S $ tellAssignment typ $ do a' <- a
-                                                                 b' <- b
-                                                                 c' <- c
-                                                                 d' <- d
-                                                                 return $ f ++ '(' : a' ++ ',' : b' ++ ',' : c' ++ ',' : d' ++")"
+fun4 typ f (S a) (S b) (S c) (S d) = S $ tellAssignment typ $ do
+    a' <- a
+    b' <- b
+    c' <- c
+    d' <- d
+    return $ f ++ '(' : a' ++ ',' : b' ++ ',' : c' ++ ',' : d' ++")"
 
 postop :: SType -> String -> S c x -> S c y
-postop typ f (S a) = S $ tellAssignment typ $ do a' <- a
-                                                 return $ '(' : a' ++ f ++ ")"
+postop typ f (S a) = S $ tellAssignment typ $ do
+    a' <- a
+    return $ '(' : a' ++ f ++ ")"
 
 preop :: SType -> String -> S c x -> S c y
-preop typ f (S a) = S $ tellAssignment typ $ do a' <- a
-                                                return $ '(' : f ++ a' ++ ")"
+preop typ f (S a) = S $ tellAssignment typ $ do
+    a' <- a
+    return $ '(' : f ++ a' ++ ")"
 
 binf :: String -> S c x -> S c y -> S c Float
 binf = bin STypeFloat
@@ -677,7 +755,6 @@ instance Num (S a Float) where
     (*) = binf "*"
     fromInteger = S . return . show
     negate = preopf "-"
-
 instance Num (S a Int) where
     (+) = bini "+"
     (-) = bini "-"
@@ -686,7 +763,6 @@ instance Num (S a Int) where
     (*) = bini "*"
     fromInteger = S . return . show
     negate = preopi "-"
-
 instance Num (S a Word) where
     (+) = binu "+"
     (-) = binu "-"
@@ -697,8 +773,8 @@ instance Num (S a Word) where
     negate = preopu "-"
 
 instance Fractional (S a Float) where
-  (/)          = binf "/"
-  fromRational = S . return . ("float(" ++) . (++ ")") . show . (`asTypeOf` (undefined :: Float)) . fromRational
+    (/) = binf "/"
+    fromRational = S . return . ("float(" ++) . (++ ")") . show . (`asTypeOf` (undefined :: Float)) . fromRational
 
 class Integral' a where
     div' :: a -> a -> a
@@ -777,41 +853,41 @@ instance Bits' (S a Word) where
     bitSize' = pure (finiteBitSize (undefined :: Word))
 
 instance Floating (S a Float) where
-  pi    = S $ return $ show (pi :: Float)
-  sqrt  = fun1f "sqrt"
-  exp   = fun1f "exp"
-  log   = fun1f "log"
-  (**)  = fun2f "pow"
-  sin   = fun1f "sin"
-  cos   = fun1f "cos"
-  tan   = fun1f "tan"
-  asin  = fun1f "asin"
-  acos  = fun1f "acos"
-  atan  = fun1f "atan"
-  sinh  = fun1f "sinh"
-  cosh  = fun1f "cosh"
-  asinh = fun1f "asinh"
-  atanh = fun1f "atanh"
-  acosh = fun1f "acosh"
+    pi    = S $ return $ show (pi :: Float)
+    sqrt  = fun1f "sqrt"
+    exp   = fun1f "exp"
+    log   = fun1f "log"
+    (**)  = fun2f "pow"
+    sin   = fun1f "sin"
+    cos   = fun1f "cos"
+    tan   = fun1f "tan"
+    asin  = fun1f "asin"
+    acos  = fun1f "acos"
+    atan  = fun1f "atan"
+    sinh  = fun1f "sinh"
+    cosh  = fun1f "cosh"
+    asinh = fun1f "asinh"
+    atanh = fun1f "atanh"
+    acosh = fun1f "acosh"
 
 instance Boolean (S a Bool) where
-  true = S $ return "true"
-  false = S $ return "false"
-  notB  = preop STypeBool "!"
-  (&&*) = bin STypeBool "&&"
-  (||*) = bin STypeBool "||"
+    true = S $ return "true"
+    false = S $ return "false"
+    notB  = preop STypeBool "!"
+    (&&*) = bin STypeBool "&&"
+    (||*) = bin STypeBool "||"
 
 type instance BooleanOf (S a x) = S a Bool
 
 instance Eq x => EqB (S a x) where
-  (==*) = bin STypeBool "=="
-  (/=*) = bin STypeBool "!="
+    (==*) = bin STypeBool "=="
+    (/=*) = bin STypeBool "!="
 
 instance Ord x => OrdB (S a x) where
-  (<*) = bin STypeBool "<"
-  (<=*) = bin STypeBool "<="
-  (>=*) = bin STypeBool ">="
-  (>*) = bin STypeBool ">"
+    (<*) = bin STypeBool "<"
+    (<=*) = bin STypeBool "<="
+    (>=*) = bin STypeBool ">="
+    (>*) = bin STypeBool ">"
 
 instance IfB (S a Float) where ifB = ifThenElse'
 instance IfB (S a Int) where ifB = ifThenElse'
@@ -822,123 +898,124 @@ instance IfB (S a (GenerativeGeometry p b)) where ifB = ifThenElse'
 instance Conjugate (S a Float)
 instance Conjugate (S a Int)
 instance Conjugate (S a Word)
-instance TrivialConjugate  (S a Float)
-instance TrivialConjugate  (S a Int)
-instance TrivialConjugate  (S a Word)
 
--- | This class provides the GPU functions either not found in Prelude's numerical classes, or that has wrong types.
---   Instances are also provided for normal 'Float's and 'Double's.
+instance TrivialConjugate (S a Float)
+instance TrivialConjugate (S a Int)
+instance TrivialConjugate (S a Word)
+
+-- | This class provides the GPU functions either not found in Prelude's numerical classes,
+-- or that has wrong types. Instances are also provided for normal 'Float's and 'Double's.
 class Floating a => Real' a where
-  rsqrt :: a -> a
-  exp2 :: a -> a
-  log2 :: a -> a
-  floor' :: a -> a
-  ceiling' :: a -> a
-  fract' :: a -> a
-  mod'' :: a -> a -> a
-  mix :: a -> a -> a-> a
-  atan2' :: a -> a -> a
+    rsqrt :: a -> a
+    exp2 :: a -> a
+    log2 :: a -> a
+    floor' :: a -> a
+    ceiling' :: a -> a
+    fract' :: a -> a
+    mod'' :: a -> a -> a
+    mix :: a -> a -> a-> a
+    atan2' :: a -> a -> a
 
-  rsqrt = (1/) . sqrt
-  exp2 = (2**)
-  log2 = logBase 2
-  mix x y a = x*(1-a)+y*a
-  fract' x = x - floor' x
-  mod'' x y = x - y* floor' (x/y)
-  floor' x = -ceiling' (-x)
-  ceiling' x = -floor' (-x)
+    rsqrt = (1/) . sqrt
+    exp2 = (2**)
+    log2 = logBase 2
+    mix x y a = x*(1-a)+y*a
+    fract' x = x - floor' x
+    mod'' x y = x - y* floor' (x/y)
+    floor' x = -ceiling' (-x)
+    ceiling' x = -floor' (-x)
 
-  {-# MINIMAL (floor' | ceiling') , atan2' #-}
+    {-# MINIMAL (floor' | ceiling') , atan2' #-}
 
 instance Real' Float where
-  floor' = fromIntegral . floor
-  ceiling' = fromIntegral . ceiling
-  atan2' = atan2
+    floor' = fromIntegral . floor
+    ceiling' = fromIntegral . ceiling
+    atan2' = atan2
 
 instance Real' Double where
-  floor' = fromIntegral . floor
-  ceiling' = fromIntegral . ceiling
-  atan2' = atan2
+    floor' = fromIntegral . floor
+    ceiling' = fromIntegral . ceiling
+    atan2' = atan2
 
 instance Real' (S x Float) where
-  rsqrt = fun1f "inversesqrt"
-  exp2 = fun1f "exp2"
-  log2 = fun1f "log2"
-  floor' = fun1f "floor"
-  ceiling' = fun1f "ceil"
-  fract' = fun1f "fract"
-  mod'' = fun2f "mod"
-  mix = fun3f "mix"
-  atan2' = fun2f "atan"
+    rsqrt = fun1f "inversesqrt"
+    exp2 = fun1f "exp2"
+    log2 = fun1f "log2"
+    floor' = fun1f "floor"
+    ceiling' = fun1f "ceil"
+    fract' = fun1f "fract"
+    mod'' = fun2f "mod"
+    mix = fun3f "mix"
+    atan2' = fun2f "atan"
 
 instance (Real' a) => Real' (V0 a) where
-  rsqrt = liftA rsqrt
-  exp2 = liftA exp2
-  log2 = liftA log2
-  floor' = liftA floor'
-  ceiling' = liftA ceiling'
-  fract' = liftA fract'
-  mod'' = liftA2 mod''
-  mix = liftA3 mix
-  atan2' = liftA2 atan2'
+    rsqrt = liftA rsqrt
+    exp2 = liftA exp2
+    log2 = liftA log2
+    floor' = liftA floor'
+    ceiling' = liftA ceiling'
+    fract' = liftA fract'
+    mod'' = liftA2 mod''
+    mix = liftA3 mix
+    atan2' = liftA2 atan2'
 instance (Real' a) => Real' (V1 a) where
-  rsqrt = liftA rsqrt
-  exp2 = liftA exp2
-  log2 = liftA log2
-  floor' = liftA floor'
-  ceiling' = liftA ceiling'
-  fract' = liftA fract'
-  mod'' = liftA2 mod''
-  mix = liftA3 mix
-  atan2' = liftA2 atan2'
+    rsqrt = liftA rsqrt
+    exp2 = liftA exp2
+    log2 = liftA log2
+    floor' = liftA floor'
+    ceiling' = liftA ceiling'
+    fract' = liftA fract'
+    mod'' = liftA2 mod''
+    mix = liftA3 mix
+    atan2' = liftA2 atan2'
 instance (Real' a) => Real' (V2 a) where
-  rsqrt = liftA rsqrt
-  exp2 = liftA exp2
-  log2 = liftA log2
-  floor' = liftA floor'
-  ceiling' = liftA ceiling'
-  fract' = liftA fract'
-  mod'' = liftA2 mod''
-  mix = liftA3 mix
-  atan2' = liftA2 atan2'
+    rsqrt = liftA rsqrt
+    exp2 = liftA exp2
+    log2 = liftA log2
+    floor' = liftA floor'
+    ceiling' = liftA ceiling'
+    fract' = liftA fract'
+    mod'' = liftA2 mod''
+    mix = liftA3 mix
+    atan2' = liftA2 atan2'
 instance (Real' a) => Real' (V3 a) where
-  rsqrt = liftA rsqrt
-  exp2 = liftA exp2
-  log2 = liftA log2
-  floor' = liftA floor'
-  ceiling' = liftA ceiling'
-  fract' = liftA fract'
-  mod'' = liftA2 mod''
-  mix = liftA3 mix
-  atan2' = liftA2 atan2'
+    rsqrt = liftA rsqrt
+    exp2 = liftA exp2
+    log2 = liftA log2
+    floor' = liftA floor'
+    ceiling' = liftA ceiling'
+    fract' = liftA fract'
+    mod'' = liftA2 mod''
+    mix = liftA3 mix
+    atan2' = liftA2 atan2'
 instance (Real' a) => Real' (V4 a) where
-  rsqrt = liftA rsqrt
-  exp2 = liftA exp2
-  log2 = liftA log2
-  floor' = liftA floor'
-  ceiling' = liftA ceiling'
-  fract' = liftA fract'
-  mod'' = liftA2 mod''
-  mix = liftA3 mix
-  atan2' = liftA2 atan2'
+    rsqrt = liftA rsqrt
+    exp2 = liftA exp2
+    log2 = liftA log2
+    floor' = liftA floor'
+    ceiling' = liftA ceiling'
+    fract' = liftA fract'
+    mod'' = liftA2 mod''
+    mix = liftA3 mix
+    atan2' = liftA2 atan2'
 
 -- | This class provides various order comparing functions
 class (IfB a, OrdB a, Floating a) => FloatingOrd a where
-  clamp :: a -> a -> a -> a
-  saturate :: a -> a
-  step :: a -> a -> a
-  smoothstep :: a -> a -> a -> a
-  clamp x a = minB (maxB x a)
-  saturate x = clamp x 0 1
-  step a x = ifB (x <* a) 0 1
-  smoothstep a b x = let t = saturate ((x-a) / (b-a)) in t*t*(3-2*t)
+    clamp :: a -> a -> a -> a
+    saturate :: a -> a
+    step :: a -> a -> a
+    smoothstep :: a -> a -> a -> a
+    clamp x a = minB (maxB x a)
+    saturate x = clamp x 0 1
+    step a x = ifB (x <* a) 0 1
+    smoothstep a b x = let t = saturate ((x-a) / (b-a)) in t*t*(3-2*t)
 
 instance FloatingOrd Float
 instance FloatingOrd Double
 instance FloatingOrd (S x Float) where
-  clamp = fun3f "clamp"
-  step = fun2f "step"
-  smoothstep = fun3f "smoothstep"
+    clamp = fun3f "clamp"
+    step = fun2f "step"
+    smoothstep = fun3f "smoothstep"
 
 -- | Provides a common way to convert numeric types to integer and floating point representations.
 class Convert a where
@@ -1005,9 +1082,11 @@ dFdx = fun1f "dFdx"
 dFdy = fun1f "dFdy"
 fwidth = fun1f "fwidth"
 
----------------------------------
-fromV f s v = S $ do params <- mapM (unS . f) $ toList v
-                     return $ s ++ '(' : intercalate "," params ++ ")"
+-- ***
+
+fromV f s v = S $ do
+    params <- mapM (unS . f) $ toList v
+    return $ s ++ '(' : intercalate "," params ++ ")"
 
 fromVec4 :: V4 (S x Float) -> S x (V4 Float)
 fromVec4 = fromV id "vec4"
@@ -1059,6 +1138,8 @@ outerToM (r,x) (c,y) a b = fmap y $ x $ fun2 (STypeMat c r) "outerProduct" a b
 ------------------------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------------------------
 
+-- Not working in GHCi?
+
 {-# RULES "norm/length4" norm = length4 #-}
 {-# RULES "norm/length3" norm = length3 #-}
 {-# RULES "norm/length2" norm = length2 #-}
@@ -1092,7 +1173,6 @@ dist3 a b = fun2f "distance" (fromVec3 a) (fromVec3 b)
 dist2 :: V2 (S x Float) -> V2 (S x Float) -> S x Float
 dist2 a b = fun2f "distance" (fromVec2 a) (fromVec2 b)
 
-
 {-# RULES "cross/S" cross = crossS #-}
 crossS :: V3 (S x Float) -> V3 (S x Float) -> V3 (S x Float)
 crossS a b = vec3S'' $ fun2 (STypeVec 3) "cross" (fromVec3 a) (fromVec3 b)
@@ -1104,12 +1184,12 @@ minS = fun2f "min"
 maxS :: S x Float -> S x Float -> S x Float
 maxS = fun2f "max"
 
---------------------------------------------------------------
+-- ***
 
 -- Matrix*Matrix, Vector*Matrix, Matrix*Vextor and outer Vector*Vector multiplications have operands in flipped order since glsl is column major
 -- inner products are not flipped since why bother :)
 
--- Also, special verions when explicit V1 matrices are used (so eg 4 version of each dot function: v*v, v*m, m*v, m*m )
+-- Also, special versions when explicit V1 matrices are used (so eg 4 version of each dot function: v*v, v*m, m*v, m*m )
 
 -- No rules for scalar products with vectors or matrices (eg scalar * matrix), we hope the glsl compiler will manage to optimize that...
 
@@ -1153,7 +1233,6 @@ mul_13_31mm a b = V1 $ V1 $ fun2f "dot" (fromVec3 $ unV1 a) (fromVec3 $ fmap unV
 mul_14_41mm :: V1 (V4 (S x Float)) -> V4 (V1 (S x Float)) -> V1 (V1 (S x Float))
 mul_14_41mm a b = V1 $ V1 $ fun2f "dot" (fromVec4 $ unV1 a) (fromVec4 $ fmap unV1 b)
 
-
 {-# RULES "mul_21_12" outer = mul_21_12 #-}
 {-# RULES "mul_21_13" outer = mul_21_13 #-}
 {-# RULES "mul_21_14" outer = mul_21_14 #-}
@@ -1181,6 +1260,7 @@ mul_41_13 :: V4 (S x Float) -> V3 (S x Float) -> V4 (V3 (S x Float))
 mul_41_13 a b = outerToM d4 d3 (fromVec3 b) (fromVec4 a)
 mul_41_14 :: V4 (S x Float) -> V4 (S x Float) -> V4 (V4 (S x Float))
 mul_41_14 a b = outerToM d4 d4 (fromVec4 b) (fromVec4 a)
+
 {-# RULES "mul_21_12m" (!*!) = mul_21_12m #-}
 {-# RULES "mul_21_13m" (!*!) = mul_21_13m #-}
 {-# RULES "mul_21_14m" (!*!) = mul_21_14m #-}
@@ -1208,7 +1288,6 @@ mul_41_13m :: V4 (V1 (S x Float)) -> V1 (V3 (S x Float)) -> V4 (V3 (S x Float))
 mul_41_13m a b = outerToM d4 d3 (fromVec3 $ unV1 b) (fromVec4 $ fmap unV1 a)
 mul_41_14m :: V4 (V1 (S x Float)) -> V1 (V4 (S x Float)) -> V4 (V4 (S x Float))
 mul_41_14m a b = outerToM d4 d4 (fromVec4 $ unV1 b) (fromVec4 $ fmap unV1 a)
-
 
 {-# RULES "mul_12_22" (*!) = mul_12_22 #-}
 {-# RULES "mul_13_32" (*!) = mul_13_32 #-}
@@ -1321,7 +1400,8 @@ mul_43_31m :: V4 (V3 (S x Float)) -> V3 (V1 (S x Float)) -> V4 (V1 (S x Float))
 mul_43_31m m v = V1 <$> mulToV4 (fromVec3 $ fmap unV1 v) (fromMat43 m)
 mul_44_41m :: V4 (V4 (S x Float)) -> V4 (V1 (S x Float)) -> V4 (V1 (S x Float))
 mul_44_41m m v = V1 <$> mulToV4 (fromVec4 $ fmap unV1 v) (fromMat44 m)
------------------------
+
+-- ***
 
 {-# RULES "mul_22_22" (!*!) = mul_22_22 #-}
 {-# RULES "mul_23_32" (!*!) = mul_23_32 #-}
@@ -1379,7 +1459,6 @@ mul_33_34 :: V3 (V3 (S x Float)) -> V3 (V4 (S x Float)) -> V3 (V4 (S x Float))
 mul_33_34 a b = mulToM d3 d4 (fromMat34 b) (fromMat33 a)
 mul_34_44 :: V3 (V4 (S x Float)) -> V4 (V4 (S x Float)) -> V3 (V4 (S x Float))
 mul_34_44 a b = mulToM d3 d4 (fromMat44 b) (fromMat34 a)
-
 
 {-# RULES "mul_42_22" (!*!) = mul_42_22 #-}
 {-# RULES "mul_43_32" (!*!) = mul_43_32 #-}

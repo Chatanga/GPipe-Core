@@ -1,6 +1,5 @@
 {-# OPTIONS_GHC -F -pgmF htfpp #-}
-{-# LANGUAGE TypeFamilies, FlexibleContexts, GADTs, TypeSynonymInstances, ScopedTypeVariables, FlexibleInstances, GeneralizedNewtypeDeriving, Arrows, MultiParamTypeClasses, AllowAmbiguousTypes #-}
--- {-# LANGUAGE RankNTypes, AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeFamilies, FlexibleContexts, GADTs, ScopedTypeVariables, FlexibleInstances, MultiParamTypeClasses, AllowAmbiguousTypes #-}
 
 module Graphics.GPipe.Internal.TestUniform where
 

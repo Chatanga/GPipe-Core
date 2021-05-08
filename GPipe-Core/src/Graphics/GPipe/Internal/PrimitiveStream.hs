@@ -160,7 +160,7 @@ toPrimitiveStream' getFeedbackBuffer sf = Shader $ do
             fb = getFeedbackBuffer >>= \g -> return (g s)
             ps = getPrimitiveArray (sf s)
         in
-            map drawcall (map (\p -> (fb, p)) ps)
+            map (drawcall . (\p -> (fb, p))) ps
 
     return $ PrimitiveStream [(x, (Nothing, PrimitiveStreamData n uSize))]
 
@@ -171,18 +171,17 @@ toPrimitiveStream' getFeedbackBuffer sf = Shader $ do
             (Kleisli makeBind) -- To construct the VAO.
             = toVertex :: ToVertex a (VertexFormat a) -- Select the ToVertex to translate 'a' into a 'VertexFormat a'.
 
-        drawcall (Just feedbackBuffer, PrimitiveArraySimple p l s a) binds = (attribs a binds, do
+        drawcall (Just feedbackBuffer, PrimitiveArraySimple p lMax s a) binds = (attribs a binds, do
             -- liftIO $ hPutStrLn stderr $ "drawcall 1"
             Just (tfName, tfqName) <- readIORef (bufTransformFeedback feedbackBuffer)
             if False
                 -- The bigger the amount of vertice, the faster a "*ERROR* Waiting for fences timed out!" will happen…
-                -- For small amounts, works fine.
+                -- For small amounts, works fine. I don’t know where lies the problem: my code or the Linux AMD driver?
                 then glDrawTransformFeedback (toGLtopology p) tfName
+                -- Querying the size allow us to work around the problem.
                 else do
                     -- Is it costly too do it repeatedly?
-                    l' <- (fromIntegral (toPrimitiveSize p) *) <$> (alloca $ \ptr -> do
-                        glGetQueryObjectiv tfqName GL_QUERY_RESULT ptr
-                        peek ptr)
+                    l' <- (fromIntegral (toPrimitiveSize p) *) <$> alloca (\ptr -> glGetQueryObjectiv tfqName GL_QUERY_RESULT ptr >> peek ptr)
                     -- liftIO $ hPutStrLn stderr $ "queried vertice count: " ++ show l'
                     when (l' > 0) $ do
                         glDrawArrays (toGLtopology p) (fromIntegral s) l'

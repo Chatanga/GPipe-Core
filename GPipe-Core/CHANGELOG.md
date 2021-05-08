@@ -1,3 +1,11 @@
+### 2.3.x
+
+- Lot of non breaking change to the code: reformatting, variable renaming, commenting...
+- Unit tests to ease the exploration of the code
+- Experimental support for geometry shader
+- Experimental support for transform feedback
+- Fixed bug in while loop (#75)
+
 ### 2.2.5
 
 - Support for GHC 8.8.3

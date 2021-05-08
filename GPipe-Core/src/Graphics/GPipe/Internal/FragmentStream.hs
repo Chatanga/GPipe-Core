@@ -1,5 +1,5 @@
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE TypeFamilies, ScopedTypeVariables, TypeSynonymInstances, FlexibleInstances, GeneralizedNewtypeDeriving, Arrows, FlexibleContexts  #-}
+{-# LANGUAGE TypeFamilies, ScopedTypeVariables, FlexibleInstances, GeneralizedNewtypeDeriving, Arrows, FlexibleContexts #-}
 module Graphics.GPipe.Internal.FragmentStream where
 
 import Control.Category hiding ((.))

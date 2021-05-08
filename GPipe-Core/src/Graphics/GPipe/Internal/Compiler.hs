@@ -546,14 +546,14 @@ createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName getTr
 -- private
 compileOpenGlShader :: GLuint -> String -> IO (Maybe String)
 compileOpenGlShader name source = do
-    -- writeFile ("shaders/" ++ show name ++ ".glsl") source -- For debug purposes only.
+    writeFile ("shaders/" ++ show name ++ ".glsl") source -- For debug purposes only.
     withCStringLen source $ \ (ptr, len) ->
                                 with ptr $ \ pptr ->
                                     with (fromIntegral len) $ \ plen ->
                                         glShaderSource name 1 pptr plen
-    -- putStrLn $ "Compiling shader " ++ show name
+    putStrLn $ "Compiling shader " ++ show name
     glCompileShader name
-    -- putStrLn $ "Compiled shader " ++ show name
+    putStrLn $ "Compiled shader " ++ show name
     compStatus <- alloca $ \ ptr -> glGetShaderiv name GL_COMPILE_STATUS ptr >> peek ptr
     if compStatus /= GL_FALSE
         then return Nothing

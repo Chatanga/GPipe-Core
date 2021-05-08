@@ -1,11 +1,16 @@
 module Graphics.GPipe.Internal.Debug where
 
-import Control.Monad
-import Data.Maybe
+-- base
+import Control.Monad ( when )
+import Data.Maybe ( fromMaybe )
 import Data.List (intercalate)
 import qualified Debug.Trace as Trace
+
+-- OpenGLRaw
 import Graphics.GL.Core45
-import Graphics.GL.Types
+import Graphics.GL.Types ( GLenum )
+
+-- ***
 
 traceIt :: Show a => String -> a -> a
 traceIt t a = Trace.trace (t ++ " = " ++ show a) a

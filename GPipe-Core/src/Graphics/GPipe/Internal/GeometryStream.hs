@@ -271,6 +271,8 @@ generativeLineStrip = S $ return notMeantToBeRead
 generativeTriangleStrip :: FragmentInput a => GGenerativeGeometry Triangles a
 generativeTriangleStrip = S $ return notMeantToBeRead
 
+-- TODO We need additional type constraints to avoid problematics case such as using emitVertex with a FS after.
+
 emitVertex :: GeometryExplosive a => a -> GGenerativeGeometry p a -> GGenerativeGeometry p a
 emitVertex a g = S $ do
     g' <- unS g
@@ -336,7 +338,7 @@ defaultDeclareGeometry t x = do
     put (n + 1)
     let name = "vgf" ++ show n
     return $ do
-        tellGlobal $ "out "
+        tellGlobal "out "
         tellGlobal $ stypeName t
         tellGlobalLn $ ' ':name
 
@@ -706,97 +708,40 @@ instance (FragmentCreator a) => FragmentCreator (V0 a) where
     createFragment = return V0
 
 instance (FragmentCreator a) => FragmentCreator (V1 a) where
-    createFragment = createFragment >>= return . V1
+    createFragment = V1 <$> createFragment
 
 instance (FragmentCreator a) => FragmentCreator (V2 a) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        return (V2 x y)
+    createFragment = V2 <$> createFragment <*> createFragment
 
 instance (FragmentCreator a) => FragmentCreator (V3 a) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        return (V3 x y z)
+    createFragment = V3 <$> createFragment <*> createFragment <*> createFragment
 
 instance (FragmentCreator a) => FragmentCreator (V4 a) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        w <- createFragment
-        return (V4 x y z w)
+    createFragment = V4 <$> createFragment <*> createFragment <*> createFragment <*> createFragment
 
 instance (FragmentCreator a, FragmentCreator b) => FragmentCreator (a,b) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        return (x, y)
+    createFragment = (,) <$> createFragment <*> createFragment
 
 instance (FragmentCreator a, FragmentCreator b, FragmentCreator c) => FragmentCreator (a,b,c) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        return (x, y, z)
+    createFragment = (,,) <$> createFragment <*> createFragment <*> createFragment
 
 instance (FragmentCreator a, FragmentCreator b, FragmentCreator c, FragmentCreator d) => FragmentCreator (a,b,c,d) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        w <- createFragment
-        return (x, y, z, w)
+    createFragment = (,,,) <$> createFragment <*> createFragment <*> createFragment <*> createFragment
 
 instance (FragmentCreator a, FragmentCreator b, FragmentCreator c, FragmentCreator d, FragmentCreator e) => FragmentCreator (a,b,c,d,e) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        w <- createFragment
-        r <- createFragment
-        return (x, y, z, w, r)
+    createFragment = (,,,,) <$> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment
 
 instance (FragmentCreator a, FragmentCreator b, FragmentCreator c, FragmentCreator d, FragmentCreator e, FragmentCreator f) => FragmentCreator (a,b,c,d,e,f) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        w <- createFragment
-        r <- createFragment
-        s <- createFragment
-        return (x, y, z, w, r, s)
+    createFragment = (,,,,,) <$> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment
 
 instance (FragmentCreator a, FragmentCreator b, FragmentCreator c, FragmentCreator d, FragmentCreator e, FragmentCreator f, FragmentCreator g) => FragmentCreator (a,b,c,d,e,f,g) where
-    createFragment = do
-        x <- createFragment
-        y <- createFragment
-        z <- createFragment
-        w <- createFragment
-        r <- createFragment
-        s <- createFragment
-        t <- createFragment
-        return (x, y, z, w, r, s, t)
+    createFragment = (,,,,,,) <$> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment
 
 instance FragmentCreator a => FragmentCreator (Quaternion a) where
-    createFragment = do
-        a <- createFragment
-        v <- createFragment
-        return (Quaternion a v)
+    createFragment = Quaternion <$> createFragment <*> createFragment
 
 instance (FragmentCreator (f a), FragmentCreator a, FragmentFormat (f a) ~ f (FragmentFormat a)) => FragmentCreator (Point f a) where
-    createFragment = do
-        a <- createFragment
-        return (P a)
+    createFragment = P <$> createFragment
 
 instance FragmentCreator a => FragmentCreator (Plucker a) where
-    createFragment = do
-        a <- createFragment
-        b <- createFragment
-        c <- createFragment
-        d <- createFragment
-        e <- createFragment
-        f <- createFragment
-        return (Plucker a b c d e f)
+    createFragment = Plucker <$> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment <*> createFragment
