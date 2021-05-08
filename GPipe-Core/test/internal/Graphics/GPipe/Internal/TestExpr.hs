@@ -45,7 +45,7 @@ test_while = do
             , "bool t3 = t2;"
             , "while(t3){"
             , "int t4 = (t0+1);"
-            , "int t5 = (10*t0);" -- Variable 'i' (t0) has already been incremented!
+            , "int t5 = (10*t0);"
             , "int t6 = (t5+t1);"
             , "t0 = t4;" -- i = i + 1
             , "t1 = t6;" -- n = 10 * i + n

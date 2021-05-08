@@ -420,7 +420,7 @@ data ShaderBase a x where -- A GADT kept opaque in the API.
 
 shaderbaseDeclare :: ShaderBase a x -> WriterT [String] ExprM (ShaderBase a x)
 shaderbaseAssign :: ShaderBase a x -> StateT [String] ExprM ()
-shaderbaseAssignWithLateAssignment :: ShaderBase a x -> StateT [String] ExprM (ExprM ())
+shaderbaseLateAssign :: ShaderBase a x -> StateT [String] ExprM (ExprM ())
 shaderbaseReturn :: ShaderBase a x -> ReaderT (ExprM [String]) (State Int) (ShaderBase a x)
 
 shaderbaseDeclare (ShaderBaseFloat _) = ShaderBaseFloat <$> shaderbaseDeclareDef STypeFloat
@@ -440,22 +440,22 @@ shaderbaseAssign (ShaderBaseWord a) = shaderbaseAssignDef a
 shaderbaseAssign (ShaderBaseBool a) = shaderbaseAssignDef a
 shaderbaseAssign ShaderBaseUnit = return ()
 shaderbaseAssign (ShaderBaseProd a b) = do
-    a' <- shaderbaseAssignWithLateAssignment a
-    b' <- shaderbaseAssignWithLateAssignment b
+    a' <- shaderbaseLateAssign a
+    b' <- shaderbaseLateAssign b
     T.lift a'
     T.lift b'
 shaderbaseAssign (ShaderBaseGenerativeGeometry a) = shaderbaseAssignDef a
 
-shaderbaseAssignWithLateAssignment (ShaderBaseFloat a) = shaderbaseAssignDef' a
-shaderbaseAssignWithLateAssignment (ShaderBaseInt a) = shaderbaseAssignDef' a
-shaderbaseAssignWithLateAssignment (ShaderBaseWord a) = shaderbaseAssignDef' a
-shaderbaseAssignWithLateAssignment (ShaderBaseBool a) = shaderbaseAssignDef' a
-shaderbaseAssignWithLateAssignment ShaderBaseUnit = return (return ())
-shaderbaseAssignWithLateAssignment (ShaderBaseProd a b) = do
-    a' <- shaderbaseAssignWithLateAssignment a
-    b' <- shaderbaseAssignWithLateAssignment b
+shaderbaseLateAssign (ShaderBaseFloat a) = shaderbaseLateAssignDef a
+shaderbaseLateAssign (ShaderBaseInt a) = shaderbaseLateAssignDef a
+shaderbaseLateAssign (ShaderBaseWord a) = shaderbaseLateAssignDef a
+shaderbaseLateAssign (ShaderBaseBool a) = shaderbaseLateAssignDef a
+shaderbaseLateAssign ShaderBaseUnit = return (return ())
+shaderbaseLateAssign (ShaderBaseProd a b) = do
+    a' <- shaderbaseLateAssign a
+    b' <- shaderbaseLateAssign b
     return (a' >> b')
-shaderbaseAssignWithLateAssignment (ShaderBaseGenerativeGeometry a) = shaderbaseAssignDef' a
+shaderbaseLateAssign (ShaderBaseGenerativeGeometry a) = shaderbaseLateAssignDef a
 
 shaderbaseReturn (ShaderBaseFloat _) = ShaderBaseFloat <$> shaderbaseReturnDef
 shaderbaseReturn (ShaderBaseInt _) = ShaderBaseInt <$> shaderbaseReturnDef
@@ -483,8 +483,8 @@ shaderbaseAssignDef (S shaderM) = do
     put $ tail xs
     T.lift $ tellAssignment' (head xs) ul
 
-shaderbaseAssignDef' :: S x a -> StateT [String] ExprM (ExprM ())
-shaderbaseAssignDef' (S shaderM) = do
+shaderbaseLateAssignDef :: S x a -> StateT [String] ExprM (ExprM ())
+shaderbaseLateAssignDef (S shaderM) = do
     ul <- T.lift shaderM
     xs <- get
     put $ tail xs
