@@ -1,4 +1,5 @@
 module Graphics.GPipe.TransformFeedback (
+    FeedbackBufferSizing(..),
     drawNothing
 )
 where

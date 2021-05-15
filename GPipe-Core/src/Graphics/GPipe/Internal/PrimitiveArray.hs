@@ -17,6 +17,7 @@ import           Graphics.GL.Types
 -- | A vertex array is the basic building block for a primitive array. It is created from the contents of a 'Buffer', but unlike a 'Buffer',
 --   it may be truncated, zipped with other vertex arrays, and even morphed into arrays of a different type with the provided 'Functor' instance.
 --   A @VertexArray t a@ has elements of type @a@, and @t@ indicates whether the vertex array may be used as instances or not.
+-- TODO Introduce a unsized VA for TF which won't be 'morphable' at all (at least until its real size could be fixed)?
 data VertexArray t a = VertexArray  {
     -- | Retrieve the number of elements in a 'VertexArray'.
     vertexArrayLength :: Int,
@@ -102,7 +103,7 @@ data TrianglesWithAdjacency = TriangleListAdjacency | TriangleStripAdjacency
 
 class PrimitiveTopology p where
     toGLtopology :: p -> GLuint
-    toPrimitiveSize :: p -> Int
+    toPrimitiveSize :: p -> GLsizei
     toGeometryShaderOutputTopology :: p -> GLuint
     toLayoutIn :: p -> String
     toLayoutOut :: p -> String

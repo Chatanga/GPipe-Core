@@ -13,6 +13,7 @@ module Graphics.GPipe.Internal.Context
     withContextWindow,
     WindowState(..),
     RenderState(..),
+    ContextDoAsync,
     liftNonWinContextIO,
     liftNonWinContextAsyncIO,
     addContextFinalizer,
@@ -256,12 +257,10 @@ liftNonWinContextAsyncIO m = do
   w <- getLastContextWin
   ContextT $ liftIO $ contextDoAsync ctx (Just w) m
 
-
 addContextFinalizer :: (ContextHandler ctx, MonadIO m) => IORef a -> IO () -> ContextT ctx os m ()
 addContextFinalizer k m = ContextT $ do
   ContextEnv ctx _ <- ask
   liftIO $ void $ mkWeakIORef k $ contextDoAsync ctx Nothing m
-
 
 getLastRenderWin = Render $ do
   rs <- lift $ lift get
@@ -301,7 +300,7 @@ withContextWindow (Window wid) m = ContextT $ do
   liftIO $ m (snd <$> IMap.lookup wid wmap)
 
 -- | This kind of exception may be thrown from GPipe when a GPU hardware limit is reached (for instance, too many textures are drawn to from the same 'FragmentStream')
-data GPipeException = GPipeException String
+newtype GPipeException = GPipeException String
      deriving (Show, Typeable)
 
 instance Exception GPipeException

@@ -1,31 +1,45 @@
 {-# LANGUAGE TypeFamilies, FlexibleContexts, FlexibleInstances, GADTs, MultiParamTypeClasses, ScopedTypeVariables, AllowAmbiguousTypes, EmptyDataDecls #-}
+
 module Graphics.GPipe.Internal.Texture where
 
-import Graphics.GPipe.Internal.Format
-import Graphics.GPipe.Internal.Expr
-import Graphics.GPipe.Internal.Context
-import Graphics.GPipe.Internal.Shader
-import Graphics.GPipe.Internal.Compiler
-import Graphics.GPipe.Internal.Buffer
-import Control.Monad.IO.Class (MonadIO, liftIO)
-import Data.IntMap.Lazy (insert)
-
-import Graphics.GL.Core45
-import Graphics.GL.Types
-import Graphics.GL.Ext.EXT.TextureFilterAnisotropic
-
+-- base
+import Control.Exception (throwIO)
+import Control.Monad
+import Data.IORef
 import Foreign.Ptr
 import Foreign.Storable
 import Foreign.Marshal.Alloc
 import Foreign.Marshal.Utils
-import Control.Monad
-import Data.IORef
-import Control.Monad.Exception (bracket, MonadAsyncException)
+
+-- exception-transformers
+import Control.Monad.Exception
+
+-- transformers
+import Control.Monad.IO.Class
+import Control.Monad.Trans.Class
+
+-- containers
+import Data.IntMap.Lazy (insert)
+
+-- gl
+import Graphics.GL.Core45
+import Graphics.GL.Types
+import Graphics.GL.Ext.EXT.TextureFilterAnisotropic
+
+-- linear
 import Linear.V4
 import Linear.V3
 import Linear.V2
-import Control.Exception (throwIO)
-import Control.Monad.Trans.Class (lift)
+
+-- .
+import Graphics.GPipe.Internal.Buffer
+import Graphics.GPipe.Internal.Compiler
+import Graphics.GPipe.Internal.Context
+import Graphics.GPipe.Internal.Expr
+import Graphics.GPipe.Internal.Format
+import Graphics.GPipe.Internal.Shader
+
+-- ***
 
 data Texture1D os a = Texture1D TexName Size1 MaxLevels
 data Texture1DArray os a = Texture1DArray TexName Size2 MaxLevels
@@ -48,14 +62,28 @@ newTexture2DArray :: forall ctx w os f c m. (ContextHandler ctx, ColorSampleable
 newTexture3D :: forall ctx w os f c m. (ContextHandler ctx, ColorRenderable c, MonadIO m) => Format c -> Size3 -> MaxLevels -> ContextT ctx os m (Texture3D os (Format c))
 newTextureCube :: forall ctx w os f c m. (ContextHandler ctx, ColorSampleable c, MonadIO m) => Format c -> Size1 -> MaxLevels -> ContextT ctx os m (TextureCube os (Format c))
 
-newTexture1D f s mx | s < 0 = error "newTexture1D, negative size"
+newTexture1D = newTexture1D' "anonymous"
+newTexture1DArray = newTexture1DArray' "anonymous"
+newTexture2D = newTexture2D' "anonymous"
+newTexture2DArray = newTexture2DArray' "anonymous"
+newTexture3D = newTexture3D' "anonymous"
+newTextureCube = newTextureCube' "anonymous"
+
+newTexture1D' :: forall ctx w os f c m. (ContextHandler ctx, ColorSampleable c, MonadIO m) => String -> Format c -> Size1 -> MaxLevels -> ContextT ctx os m (Texture1D os (Format c))
+newTexture1DArray' :: forall ctx w os f c m. (ContextHandler ctx, ColorSampleable c, MonadIO m) => String -> Format c -> Size2 -> MaxLevels -> ContextT ctx os m (Texture1DArray os (Format c))
+newTexture2D' :: forall ctx w os f c m. (ContextHandler ctx, TextureFormat c, MonadIO m) => String -> Format c -> Size2 -> MaxLevels -> ContextT ctx os m (Texture2D os (Format c))
+newTexture2DArray' :: forall ctx w os f c m. (ContextHandler ctx, ColorSampleable c, MonadIO m) => String -> Format c -> Size3 -> MaxLevels -> ContextT ctx os m (Texture2DArray os (Format c))
+newTexture3D' :: forall ctx w os f c m. (ContextHandler ctx, ColorRenderable c, MonadIO m) => String -> Format c -> Size3 -> MaxLevels -> ContextT ctx os m (Texture3D os (Format c))
+newTextureCube' :: forall ctx w os f c m. (ContextHandler ctx, ColorSampleable c, MonadIO m) => String -> Format c -> Size1 -> MaxLevels -> ContextT ctx os m (TextureCube os (Format c))
+
+newTexture1D' title f s mx | s < 0 = error "newTexture1D, negative size"
                     | mx <= 0 = error "newTexture1D, non-positive MaxLevels"
                     | otherwise = do
                         mxSize <- getGlValue GL_MAX_TEXTURE_SIZE
                         if s > mxSize
                           then liftIO $ throwIO $ GPipeException "newTexture1D, size larger than maximum supported by graphics driver"
                           else do
-                            t <- makeTex
+                            t <- makeTex title
                             let glintf = fromIntegral $ getGlInternalFormat f
                                 glf = getGlFormat (undefined :: c)
                                 ls = min mx (calcMaxLevels s)
@@ -66,7 +94,7 @@ newTexture1D f s mx | s < 0 = error "newTexture1D, negative size"
                                     glTexImage1D GL_TEXTURE_1D l glintf (fromIntegral lw) 0 glf GL_BYTE nullPtr
                                 setDefaultTexParams GL_TEXTURE_1D (ls-1)
                             return tex
-newTexture1DArray f s@(V2 w sl) mx
+newTexture1DArray' title f s@(V2 w sl) mx
                     | w < 0 || sl < 0 = error "newTexture1DArray, negative size"
                     | mx <= 0 = error "newTexture1DArray, non-positive MaxLevels"
                     | otherwise = do
@@ -74,7 +102,7 @@ newTexture1DArray f s@(V2 w sl) mx
                             if w > mxSize || sl > mxSize
                               then liftIO $ throwIO $ GPipeException "newTexture1DArray, size larger than maximum supported by graphics driver"
                               else do
-                                t <- makeTex
+                                t <- makeTex title
                                 let glintf = fromIntegral $ getGlInternalFormat f
                                     glf = getGlFormat (undefined :: c)
                                     ls = min mx (calcMaxLevels w)
@@ -85,14 +113,14 @@ newTexture1DArray f s@(V2 w sl) mx
                                         glTexImage2D GL_TEXTURE_1D_ARRAY l glintf (fromIntegral lw) (fromIntegral sl) 0 glf GL_BYTE nullPtr
                                     setDefaultTexParams GL_TEXTURE_1D_ARRAY (ls-1)
                                 return tex
-newTexture2D f s@(V2 w h) mx | w < 0 || h < 0 = error "newTexture2D, negative size"
+newTexture2D' title f s@(V2 w h) mx | w < 0 || h < 0 = error "newTexture2D, negative size"
                              | mx <= 0 = error "newTexture2D, non-positive MaxLevels"
                              | getGlFormat (undefined :: c) == GL_STENCIL_INDEX = do
                                 mxSize <- getGlValue GL_MAX_RENDERBUFFER_SIZE
                                 if w > mxSize || h > mxSize
                                   then liftIO $ throwIO $ GPipeException "newTexture2D, size larger than maximum supported by graphics driver"
                                   else do
-                                    t <- makeRenderBuff
+                                    t <- makeRenderBuff title
                                     liftNonWinContextAsyncIO $
                                        glRenderbufferStorage GL_RENDERBUFFER (getGlInternalFormat f) (fromIntegral w) (fromIntegral h)
                                     return $ RenderBuffer2D t s
@@ -101,7 +129,7 @@ newTexture2D f s@(V2 w h) mx | w < 0 || h < 0 = error "newTexture2D, negative si
                                 if w > mxSize || h > mxSize
                                   then liftIO $ throwIO $ GPipeException "newTexture2D, size larger than maximum supported by graphics driver"
                                   else do
-                                    t <- makeTex
+                                    t <- makeTex title
                                     let glintf = fromIntegral $ getGlInternalFormat f
                                         glf = getGlFormat (undefined :: c)
                                         ls = min mx (calcMaxLevels (max w h))
@@ -113,7 +141,7 @@ newTexture2D f s@(V2 w h) mx | w < 0 || h < 0 = error "newTexture2D, negative si
                                         setDefaultTexParams GL_TEXTURE_2D (ls-1)
                                     return tex
 
-newTexture2DArray f s@(V3 w h sl) mx
+newTexture2DArray' title f s@(V3 w h sl) mx
                                 | w < 0 || h < 0 || sl < 0 = error "newTexture2DArray, negative size"
                                 | mx <= 0 = error "newTexture2DArray, non-positive MaxLevels"
                                 | otherwise = do
@@ -121,7 +149,7 @@ newTexture2DArray f s@(V3 w h sl) mx
                     if w > mxSize || h > mxSize || sl > mxSize
                       then liftIO $ throwIO $ GPipeException "newTexture2DArray, size larger than maximum supported by graphics driver"
                       else do
-                        t <- makeTex
+                        t <- makeTex title
                         let glintf = fromIntegral $ getGlInternalFormat f
                             glf = getGlFormat (undefined :: c)
                             ls = min mx (calcMaxLevels (max w h))
@@ -133,14 +161,14 @@ newTexture2DArray f s@(V3 w h sl) mx
                             setDefaultTexParams GL_TEXTURE_2D_ARRAY (ls-1)
                         return tex
 
-newTexture3D f s@(V3 w h d) mx | w < 0 || h < 0 || d < 0 = error "newTexture3D, negative size"
+newTexture3D' title f s@(V3 w h d) mx | w < 0 || h < 0 || d < 0 = error "newTexture3D, negative size"
                                | mx <= 0 = error "newTexture3D, non-positive MaxLevels"
                                | otherwise = do
                     mxSize <- getGlValue GL_MAX_TEXTURE_SIZE
                     if w > mxSize || h > mxSize || d > mxSize
                       then liftIO $ throwIO $ GPipeException "newTexture3D, size larger than maximum supported by graphics driver"
                       else do
-                        t <- makeTex
+                        t <- makeTex title
                         let glintf = fromIntegral $ getGlInternalFormat f
                             glf = getGlFormat (undefined :: c)
                             ls = min mx (calcMaxLevels (max w (max h d)))
@@ -151,14 +179,14 @@ newTexture3D f s@(V3 w h d) mx | w < 0 || h < 0 || d < 0 = error "newTexture3D, 
                                 glTexImage3D GL_TEXTURE_3D l glintf (fromIntegral lw) (fromIntegral lh) (fromIntegral ld) 0 glf GL_BYTE nullPtr
                             setDefaultTexParams GL_TEXTURE_3D (ls-1)
                         return tex
-newTextureCube f s mx | s < 0 = error "newTextureCube, negative size"
+newTextureCube' title f s mx | s < 0 = error "newTextureCube, negative size"
                       | mx <= 0 = error "newTextureCube, non-positive MaxLevels"
                       | otherwise = do
                     mxSize <- getGlValue GL_MAX_CUBE_MAP_TEXTURE_SIZE
                     if s > mxSize
                       then liftIO $ throwIO $ GPipeException "newTextureCube, size larger than maximum supported by graphics driver"
                       else do
-                            t <- makeTex
+                            t <- makeTex title
                             let glintf = fromIntegral $ getGlInternalFormat f
                                 glf = getGlFormat (undefined :: c)
                                 ls = min mx (calcMaxLevels s)
@@ -220,19 +248,19 @@ calcMaxLevels s = 1 + truncate (logBase 2.0 (fromIntegral s :: Double))
 
 type TexName = IORef GLuint
 
-makeTex :: (ContextHandler ctx, MonadIO m) => ContextT ctx os m TexName
-makeTex = do
+makeTex :: (ContextHandler ctx, MonadIO m) => String -> ContextT ctx os m TexName
+makeTex title = do
     name <- liftNonWinContextIO $ alloca (\ptr -> glGenTextures 1 ptr >> peek ptr)
     tex <- liftIO $ newIORef name
-    addContextFinalizer tex $ with name (glDeleteTextures 1)
+    addContextFinalizer tex $ with name (\n -> putStrLn ("glDeleteTextures " ++ title) >> glDeleteTextures 1 n)
     addFBOTextureFinalizer False tex
     return tex
 
-makeRenderBuff :: (ContextHandler ctx, MonadIO m) => ContextT ctx os m TexName
-makeRenderBuff = do
+makeRenderBuff :: (ContextHandler ctx, MonadIO m) => String -> ContextT ctx os m TexName
+makeRenderBuff title = do
     name <- liftNonWinContextIO $ alloca (\ptr -> glGenRenderbuffers 1 ptr >> peek ptr)
     tex <- liftIO $ newIORef name
-    addContextFinalizer tex $ with name (glDeleteRenderbuffers 1)
+    addContextFinalizer tex $ with name (\n -> putStrLn ("glDeleteRenderbuffers " ++ title) >> glDeleteRenderbuffers 1 n)
     addFBOTextureFinalizer True tex
     return tex
 

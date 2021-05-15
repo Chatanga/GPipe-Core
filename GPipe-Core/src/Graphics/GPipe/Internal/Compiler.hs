@@ -28,7 +28,6 @@ import Data.IORef
 import Data.List (zip5)
 import Data.Word
 import Graphics.GPipe.Internal.Debug
-import System.IO
 import Control.Monad.IO.Class
 
 -- public
@@ -48,7 +47,7 @@ data Drawcall s = Drawcall
                 )
         ,   IO ()
         )
-    ,   feedbackBuffer :: Maybe (s -> IO (GLuint, GLuint, GLuint, GLuint))
+    ,   feedback :: Maybe (s -> ContextDoAsync -> IO () -> IO ())
         -- Key for RenderIOState::inputArrayToRenderIOs.
     ,   primitiveName :: Int
         -- Key for RenderIOState::rasterizationNameToRenderIO.
@@ -69,11 +68,11 @@ data Drawcall s = Drawcall
 
 -- public
 mapDrawcall :: (s -> s') -> Drawcall s' -> Drawcall s
-mapDrawcall f dc = dc{ drawcallFbo = drawcallFbo dc . f, feedbackBuffer = feedbackBuffer' }
+mapDrawcall f dc = dc{ drawcallFbo = drawcallFbo dc . f, feedback = feedback' }
     where
-        feedbackBuffer' = case feedbackBuffer dc of
+        feedback' = case feedback dc of
             Nothing -> Nothing
-            Just b -> Just (b . f)
+            Just withFeedback -> Just (withFeedback . f)
 
 -- index/binding refers to what is used in the final shader. Index space is
 -- limited, usually 16 attribname is what was declared, but all might not be
@@ -280,7 +279,7 @@ innerCompile state (drawcall, unis, samps, ubinds, sbinds) = do
                 whenJust' ofShader $ glAttachShader pName
                 mapM_ (\(name, ix) -> withCString ("in"++ show name) $ glBindAttribLocation pName ix) $ zip inputs [0..]
 
-                case (feedbackBuffer drawcall, rasterizationName drawcall) of
+                case (feedback drawcall, rasterizationName drawcall) of
                     (Nothing, Just _) -> return ()
                     (Just _, Just geoN) -> (transformFeedbackToRenderIO state ! geoN) undefined pName
 
@@ -319,9 +318,9 @@ innerCompile state (drawcall, unis, samps, ubinds, sbinds) = do
         -- Left: the failure.
         Left err -> return $ Left err
         -- Right: the program wrapped in a Render monad.
-        Right pName -> Right <$> case (feedbackBuffer drawcall, rasterizationName drawcall) of
+        Right pName -> Right <$> case (feedback drawcall, rasterizationName drawcall) of
             (Nothing, Just rastN) -> createRenderer state (drawcall, unis, ubinds, samps, sbinds) pName rastN
-            (Just getTransformFeedbackName, Just geoN) -> createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName getTransformFeedbackName geoN
+            (Just withFeedback, Just geoN) -> createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName withFeedback geoN
             _ -> error "No rasterization nor feedback!"
 
 -- private
@@ -396,7 +395,6 @@ createRenderer state (drawcall, unis, ubinds, samps, sbinds) pName rastN = do
                     return wid
                 Right (fboKeyIO, fboIO) -> do
                     -- Off-screen draw call, continue with last context
-                    -- (something wrong here?)
                     (cwid, cd, doAsync) <- unRender getLastRenderWin
                     inwin cwid $ do
                         fbokey <- fboKeyIO
@@ -409,7 +407,7 @@ createRenderer state (drawcall, unis, ubinds, samps, sbinds) pName rastN = do
                             Nothing -> do
                                 fbo' <- alloca $ \ ptr -> glGenFramebuffers 1 ptr >> peek ptr
                                 fbo <- newIORef fbo'
-                                void $ mkWeakIORef fbo (doAsync $ with fbo' $ glDeleteFramebuffers 1)
+                                void $ mkWeakIORef fbo (doAsync $ with fbo' $ \n -> putStrLn ("glDeleteFramebuffers " ++ show n) >> glDeleteFramebuffers 1 n)
                                 setFBO cd fbokey fbo
                                 glBindFramebuffer GL_DRAW_FRAMEBUFFER fbo'
                                 glEnable GL_FRAMEBUFFER_SRGB
@@ -436,7 +434,8 @@ createRenderer state (drawcall, unis, ubinds, samps, sbinds) pName rastN = do
                                 Nothing -> do
                                     vao' <- alloca $ \ ptr -> glGenVertexArrays 1 ptr >> peek ptr
                                     vao <- newIORef vao'
-                                    void $ mkWeakIORef vao (doAsync $ with vao' $ glDeleteVertexArrays 1)
+                                    -- void $ mkWeakIORef vao (doAsync $ with vao' $ \n -> putStrLn ("glDeleteVertexArrays " ++ show n) >> glDeleteVertexArrays 1 n)
+                                    void $ mkWeakIORef vao (doAsync $ with vao' $ \n -> putStrLn ("NO glDeleteVertexArrays " ++ show n))
                                     setVAO cd key vao
                                     glBindVertexArray vao'
                                     vaoIO
@@ -444,7 +443,7 @@ createRenderer state (drawcall, unis, ubinds, samps, sbinds) pName rastN = do
 
     let deleter = do
             glDeleteProgram pName
-            when (pstrUSize > 0) $ with pstrUBuf (glDeleteBuffers 1)
+            when (pstrUSize > 0) $ with pstrUBuf (\n -> putStrLn ("glDeleteBuffers (S) " ++ show n) >> glDeleteBuffers 1 n)
 
     return ((pNameRef, deleter), renderer)
 
@@ -457,12 +456,12 @@ createFeedbackRenderer :: RenderIOState s -- Interactions between the drawcall a
         , [Int] -- its allocated texture units.
         )
     ->  GLuint -- program name
-    ->  (s -> IO (GLuint, GLuint, GLuint, GLuint)) -- transform feedback stuff
+    ->  (s -> ContextDoAsync -> IO () -> IO ()) -- transform feedback stuff
     ->  Int
     ->  IO  ( (IORef GLuint, IO ()) -- The program name and its destructor.
             , s -> Render os () -- The program's renderer as a function on a render (OpenGL) state.
             )
-createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName getTransformFeedbackName geoN = do
+createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName withFeedback geoN = do
     let fboSetup = drawcallFbo drawcall
         primN = primitiveName drawcall
         inputs = usedInputs drawcall
@@ -488,8 +487,8 @@ createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName getTr
     let renderer = \x -> Render $ do
             rs <- lift $ lift get
             renv <- lift ask
+            -- FIXME Something wrong here?
             let (Left windowId, blendIO) = fboSetup x
-                transformFeedback = getTransformFeedbackName x
 
             case Map.lookup windowId (perWindowRenderState rs) of
                 Nothing -> return () -- Window deleted
@@ -498,10 +497,11 @@ createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName getTr
                     liftIO $ asSync doAsync $ do
                         pName' <- readIORef pNameRef -- Cant use pName, need to touch pNameRef
                         glUseProgram pName'
-                        -- Too late: (transformFeedbackToRenderIO state ! geoN) x pName'
                         True <- bind uNameToRenderIOMap' (zip unis ubinds) x (const $ return True)
                         isOk <- bind (samplerNameToRenderIO state) (zip samps sbinds) x (return . not . (`Set.member` renderWriteTextures rs))
                         blendIO
+
+                    let doWithFeedback = withFeedback x doAsync
 
                     -- Draw each vertex array.
                     forM_ (map ($ (inputs, pstrUBuf, pstrUSize)) ((inputArrayToRenderIO state ! primN) x)) $ \ ((keyIO, vaoIO), drawIO) -> liftIO $ do
@@ -515,31 +515,16 @@ createFeedbackRenderer state (drawcall, unis, ubinds, samps, sbinds) pName getTr
                             Nothing -> do
                                 vao' <- alloca $ \ ptr -> glGenVertexArrays 1 ptr >> peek ptr
                                 vao <- newIORef vao'
-                                void $ mkWeakIORef vao (doAsync $ with vao' $ glDeleteVertexArrays 1)
+                                -- void $ mkWeakIORef vao (doAsync $ with vao' $ \n -> putStrLn ("glDeleteVertexArrays (TF) " ++ show n) >> glDeleteVertexArrays 1 n)
+                                void $ mkWeakIORef vao (doAsync $ with vao' $ \n -> putStrLn ("NO glDeleteVertexArrays (TF) " ++ show n))
                                 setVAO cd key vao
                                 glBindVertexArray vao'
                                 vaoIO
-                        (bName, tfName, tfqName, topology) <- transformFeedback
-                        glBindTransformFeedback GL_TRANSFORM_FEEDBACK tfName
-                        glBindBufferBase GL_TRANSFORM_FEEDBACK_BUFFER 0 bName
-                        glBeginQuery GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN tfqName
-                        -- liftIO $ hPutStrLn stderr $ "doing transform feedback"
-                        glBeginTransformFeedback topology
-                        glEnable GL_RASTERIZER_DISCARD
-                        drawIO
-                        glDisable GL_RASTERIZER_DISCARD
-                        glEndTransformFeedback
-                        glEndQuery(GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN);
-                        {-
-                        l <- alloca $ \ptr -> do
-                            glGetQueryObjectiv tfqName GL_QUERY_RESULT ptr
-                            peek ptr
-                        liftIO $ hPutStrLn stderr $ "generated primitive count: " ++ show l
-                        -}
+                        doWithFeedback drawIO
 
     let deleter = do
             glDeleteProgram pName
-            when (pstrUSize > 0) $ with pstrUBuf (glDeleteBuffers 1)
+            when (pstrUSize > 0) $ with pstrUBuf (\n -> putStrLn ("glDeleteBuffers (S+TF) " ++ show n) >> glDeleteBuffers 1 n)
 
     return ((pNameRef, deleter), renderer)
 

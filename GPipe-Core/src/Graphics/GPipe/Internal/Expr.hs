@@ -13,7 +13,6 @@ import Data.Foldable
 import Data.Int
 import Data.List
 import Data.Maybe
-import Data.Monoid
 import Data.Word
 
 -- containers
@@ -42,8 +41,6 @@ import Linear.Vector
 
 -- .
 import Data.SNMap
-
-import Graphics.GPipe.Internal.Debug
 
 -- ***
 

@@ -447,7 +447,7 @@ clearImageColor i c = do
         Nothing -> Render $ maybeThrow $ liftIO $ asSync doAsync $ do
             fbo' <- alloca (\ptr -> glGenFramebuffers 1 ptr >> peek ptr)
             fbo <- newIORef fbo'
-            void $ mkWeakIORef fbo (doAsync $ with fbo' $ glDeleteFramebuffers 1)
+            void $ mkWeakIORef fbo (doAsync $ with fbo' $ \n -> putStrLn ("glDeleteFramebuffers " ++ show n) >> glDeleteFramebuffers 1 n)
             setFBO cd fbokey fbo
             glBindFramebuffer GL_DRAW_FRAMEBUFFER fbo'
             glEnable GL_FRAMEBUFFER_SRGB
@@ -480,7 +480,7 @@ clearImageDepth i d = do
                     asSync doAsync $ do
                         fbo' <- alloca (\ptr -> glGenFramebuffers 1 ptr >> peek ptr)
                         fbo <- newIORef fbo'
-                        void $ mkWeakIORef fbo (doAsync $ with fbo' $ glDeleteFramebuffers 1)
+                        void $ mkWeakIORef fbo (doAsync $ with fbo' $ \n -> putStrLn ("glDeleteFramebuffers " ++ show n) >> glDeleteFramebuffers 1 n)
                         setFBO cd fbokey fbo
                         glBindFramebuffer GL_DRAW_FRAMEBUFFER fbo'
                         glEnable GL_FRAMEBUFFER_SRGB
@@ -514,7 +514,7 @@ clearImageStencil i s = do
                     asSync doAsync $ do
                         fbo' <- alloca (\ptr -> glGenFramebuffers 1 ptr >> peek ptr)
                         fbo <- newIORef fbo'
-                        void $ mkWeakIORef fbo (doAsync $ with fbo' $ glDeleteFramebuffers 1)
+                        void $ mkWeakIORef fbo (doAsync $ with fbo' $ \n -> putStrLn ("glDeleteFramebuffers " ++ show n) >> glDeleteFramebuffers 1 n)
                         setFBO cd fbokey fbo
                         glBindFramebuffer GL_DRAW_FRAMEBUFFER fbo'
                         glEnable GL_FRAMEBUFFER_SRGB
@@ -548,7 +548,7 @@ clearImageDepthStencil i d s = do
                     asSync doAsync $ do
                         fbo' <- alloca (\ptr -> glGenFramebuffers 1 ptr >> peek ptr)
                         fbo <- newIORef fbo'
-                        void $ mkWeakIORef fbo (doAsync $ with fbo' $ glDeleteFramebuffers 1)
+                        void $ mkWeakIORef fbo (doAsync $ with fbo' $ \n -> putStrLn ("glDeleteFramebuffers " ++ show n) >> glDeleteFramebuffers 1 n)
                         setFBO cd fbokey fbo
                         glBindFramebuffer GL_DRAW_FRAMEBUFFER fbo'
                         glEnable GL_FRAMEBUFFER_SRGB

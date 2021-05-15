@@ -3,7 +3,6 @@
 
 module Graphics.GPipe.Internal.PrimitiveStream where
 
-import Control.Arrow
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Reader
@@ -137,6 +136,25 @@ instance Arrow ToVertex where
 toPrimitiveStream :: forall os f s a p. (PrimitiveTopology p, VertexInput a) => (s -> PrimitiveArray p a) -> Shader os s (PrimitiveStream p (VertexFormat a))
 toPrimitiveStream = toPrimitiveStream' Nothing
 
+-- TODO The feedback should be implied from primitive array -> vertex array -> buffer.
+toFeedbackPrimitiveStream :: forall os f s a b p. (PrimitiveTopology p, VertexInput a) => (s -> Buffer os b) -> (s -> PrimitiveArray p a) -> Shader os s (PrimitiveStream p (VertexFormat a))
+toFeedbackPrimitiveStream getFeedbackBuffer = toPrimitiveStream' (Just getFeedbackBuffer)
+
+-- It would be nice to have it in the Render monad... which is inherently asynchronous and can't return anything from IO.
+-- A rather general problem with any kind of feedback which also shows up in the module dependencies!
+feedbackBufSize :: forall ctx m os p a. (PrimitiveTopology p)  => p -> Buffer os a -> IO (Either GLuint GLsizei)
+feedbackBufSize _ feedbackBuffer = do
+    let tfRef = bufTransformFeedback feedbackBuffer
+    Just r <- readIORef tfRef
+    case r of
+        (Nothing, Nothing) -> return $ Right $ fromIntegral $ bufSize feedbackBuffer
+        (Just tfName, Nothing) -> return $ Left tfName
+        (Nothing, Just tfqName) -> do
+            primitiveCount <- alloca $ \ptr -> do
+                glGetQueryObjectiv tfqName GL_QUERY_RESULT ptr
+                peek ptr
+            return $ Right $ toPrimitiveSize (undefined :: p) * primitiveCount
+
 toPrimitiveStream' :: forall os f s a b p. (PrimitiveTopology p, VertexInput a) => Maybe (s -> Buffer os b) -> (s -> PrimitiveArray p a) -> Shader os s (PrimitiveStream p (VertexFormat a))
 toPrimitiveStream' getFeedbackBuffer sf = Shader $ do
 
@@ -172,37 +190,34 @@ toPrimitiveStream' getFeedbackBuffer sf = Shader $ do
             = toVertex :: ToVertex a (VertexFormat a) -- Select the ToVertex to translate 'a' into a 'VertexFormat a'.
 
         drawcall (Just feedbackBuffer, PrimitiveArraySimple p lMax s a) binds = (attribs a binds, do
-            -- liftIO $ hPutStrLn stderr $ "drawcall 1"
-            Just (tfName, tfqName) <- readIORef (bufTransformFeedback feedbackBuffer)
-            if False
-                -- The bigger the amount of vertice, the faster a "*ERROR* Waiting for fences timed out!" will happen…
-                -- For small amounts, works fine. I don’t know where lies the problem: my code or the Linux AMD driver?
-                then glDrawTransformFeedback (toGLtopology p) tfName
-                -- Querying the size allow us to work around the problem.
-                else do
-                    -- Is it costly too do it repeatedly?
-                    l' <- (fromIntegral (toPrimitiveSize p) *) <$> alloca (\ptr -> glGetQueryObjectiv tfqName GL_QUERY_RESULT ptr >> peek ptr)
-                    -- liftIO $ hPutStrLn stderr $ "queried vertice count: " ++ show l'
-                    when (l' > 0) $ do
-                        glDrawArrays (toGLtopology p) (fromIntegral s) l'
+            r <- feedbackBufSize (undefined :: p) feedbackBuffer
+            case r of
+                Left tfName -> do
+                    glDrawTransformFeedback (toGLtopology p) tfName
+                    -- Why is this costly call mandatory? (crash/infinite loop otherwise)
+                    glFlush
+                Right verticeCount -> do
+                    glDrawArrays (toGLtopology p) (fromIntegral s) verticeCount
             )
         drawcall (Just feedbackBuffer, PrimitiveArrayInstanced p il l s a) binds = (attribs a binds, do
-            -- liftIO $ hPutStrLn stderr $ "drawcall 2"
-            Just (tfName, _) <- readIORef (bufTransformFeedback feedbackBuffer)
-            glDrawTransformFeedbackInstanced (toGLtopology p) tfName (fromIntegral il))
+            r <- feedbackBufSize (undefined :: p) feedbackBuffer
+            case r of
+                Left tfName -> do
+                    glDrawTransformFeedbackInstanced (toGLtopology p) tfName (fromIntegral il)
+                    -- Why is this costly call mandatory? (crash/infinite loop otherwise)
+                    glFlush
+                Right verticeCount -> do
+                    glDrawArraysInstanced (toGLtopology p) (fromIntegral s) verticeCount (fromIntegral il)
+            )
 
         drawcall (Nothing, PrimitiveArraySimple p l s a) binds = (attribs a binds, do
-            -- liftIO $ hPutStrLn stderr $ "drawcall 3"
             glDrawArrays (toGLtopology p) (fromIntegral s) (fromIntegral l))
         drawcall (Nothing, PrimitiveArrayIndexed p i s a) binds = (attribs a binds, do
-            -- liftIO $ hPutStrLn stderr $ "drawcall 4"
             bindIndexBuffer i
             glDrawElementsBaseVertex (toGLtopology p) (fromIntegral $ indexArrayLength i) (indexType i) (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i)) (fromIntegral s))
         drawcall (Nothing, PrimitiveArrayInstanced p il l s a) binds = (attribs a binds, do
-            -- liftIO $ hPutStrLn stderr $ "drawcall 5"
             glDrawArraysInstanced (toGLtopology p) (fromIntegral s) (fromIntegral l) (fromIntegral il))
         drawcall (Nothing, PrimitiveArrayIndexedInstanced p i il s a) binds = (attribs a binds, do
-            -- liftIO $ hPutStrLn stderr $ "drawcall 6"
             bindIndexBuffer i
             glDrawElementsInstancedBaseVertex (toGLtopology p) (fromIntegral $ indexArrayLength i) (indexType i) (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i)) (fromIntegral il) (fromIntegral s))
 

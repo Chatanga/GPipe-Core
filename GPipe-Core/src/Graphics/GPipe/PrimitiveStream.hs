@@ -22,7 +22,8 @@ module Graphics.GPipe.PrimitiveStream (
 
     -- * Creating PrimitiveStreams
     toPrimitiveStream,
-    toPrimitiveStream',
+    feedbackBufSize,
+    toFeedbackPrimitiveStream,
 
     -- * Various PrimitiveStream operations
     withInputIndices,
