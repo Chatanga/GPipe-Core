@@ -4,7 +4,7 @@
 - Unit tests to ease the exploration of the code.
 - Experimental support for geometry shader.
 - Experimental support for transform feedback.
-- Shader bitwise operator.
+- Shader bitwise operators.
 - Instanced rendering in 3D textures.
 - Fixed bug in while loop ([#75](https://github.com/tobbebex/GPipe-Core/issues/75)).
 

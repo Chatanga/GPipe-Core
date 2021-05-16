@@ -84,15 +84,15 @@ tests:
 #        - test-framework
 #        - test-framework-hunit
 
-executables:
-    playground:
-        main: MainTest.hs
-        source-dirs:
-        - src
-        - playground
-        dependencies:
-        - linear
-        - JuicyPixels
+#executables:
+#    playground:
+#        main: MainTest.hs
+#        source-dirs:
+#        - src
+#        - playground
+#        dependencies:
+#        - linear
+#        - JuicyPixels
 
 ghc-options:
 - -j4
