@@ -29,6 +29,10 @@ module Graphics.GPipe.Context (
     swapWindowBuffers,
     withContextWindow,
 
+    -- * ?
+    liftNonWinContextIO,
+    liftNonWinContextAsyncIO,
+
     -- * Extending interface
     ContextHandler(..),
 

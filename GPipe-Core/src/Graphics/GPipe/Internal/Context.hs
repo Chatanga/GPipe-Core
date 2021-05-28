@@ -141,6 +141,7 @@ data WindowState = WindowState {
 -- | Run a 'Render' monad, that may have the effect of windows or textures being drawn to.
 --
 --   May throw a 'GPipeException' if a combination of draw images (FBO) used by this render call is unsupported by the graphics driver
+-- TODO? render :: (ContextHandler ctx, MonadIO m, MonadAsyncException m) => Render os () -> ContextT ctx os m ()
 render :: (ContextHandler ctx, MonadIO m, MonadException m) => Render os () -> ContextT ctx os m ()
 render (Render m) = do
   void getLastContextWin -- To create hidden window if needed
