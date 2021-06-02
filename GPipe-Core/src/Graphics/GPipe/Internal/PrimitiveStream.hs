@@ -189,37 +189,70 @@ toPrimitiveStream' getFeedbackBuffer sf = Shader $ do
             (Kleisli makeBind) -- To construct the VAO.
             = toVertex :: ToVertex a (VertexFormat a) -- Select the ToVertex to translate 'a' into a 'VertexFormat a'.
 
+        -- Why is the costly call to 'glFlush' mandatory? (crash/infinite loop otherwise)
         drawcall (Just feedbackBuffer, PrimitiveArraySimple p lMax s a) binds = (attribs a binds, do
             r <- feedbackBufSize (undefined :: p) feedbackBuffer
             case r of
                 Left tfName -> do
                     glDrawTransformFeedback (toGLtopology p) tfName
-                    -- Why is this costly call mandatory? (crash/infinite loop otherwise)
                     glFlush
                 Right verticeCount -> do
                     glDrawArrays (toGLtopology p) (fromIntegral s) verticeCount
+            )
+        drawcall (Just feedbackBuffer, PrimitiveArrayIndexed p i s a) binds = (attribs a binds, do
+            r <- feedbackBufSize (undefined :: p) feedbackBuffer
+            case r of
+                Left tfName -> do
+                    error "Not supported!"
+                Right indexCount -> do
+                    bindIndexBuffer i
+                    glDrawElementsBaseVertex
+                        (toGLtopology p)
+                        indexCount
+                        (indexType i)
+                        (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i))
+                        (fromIntegral s)
             )
         drawcall (Just feedbackBuffer, PrimitiveArrayInstanced p il l s a) binds = (attribs a binds, do
             r <- feedbackBufSize (undefined :: p) feedbackBuffer
             case r of
                 Left tfName -> do
                     glDrawTransformFeedbackInstanced (toGLtopology p) tfName (fromIntegral il)
-                    -- Why is this costly call mandatory? (crash/infinite loop otherwise)
                     glFlush
                 Right verticeCount -> do
                     glDrawArraysInstanced (toGLtopology p) (fromIntegral s) verticeCount (fromIntegral il)
             )
+        drawcall (Just feedbackBuffer, PrimitiveArrayIndexedInstanced p i il s a) binds =
+            error "Not supported!"
 
         drawcall (Nothing, PrimitiveArraySimple p l s a) binds = (attribs a binds, do
-            glDrawArrays (toGLtopology p) (fromIntegral s) (fromIntegral l))
+            glDrawArrays
+                (toGLtopology p)
+                (fromIntegral s)
+                (fromIntegral l))
         drawcall (Nothing, PrimitiveArrayIndexed p i s a) binds = (attribs a binds, do
             bindIndexBuffer i
-            glDrawElementsBaseVertex (toGLtopology p) (fromIntegral $ indexArrayLength i) (indexType i) (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i)) (fromIntegral s))
+            glDrawElementsBaseVertex
+                (toGLtopology p)
+                (fromIntegral $ indexArrayLength i)
+                (indexType i)
+                (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i))
+                (fromIntegral s))
         drawcall (Nothing, PrimitiveArrayInstanced p il l s a) binds = (attribs a binds, do
-            glDrawArraysInstanced (toGLtopology p) (fromIntegral s) (fromIntegral l) (fromIntegral il))
+            glDrawArraysInstanced
+                (toGLtopology p)
+                (fromIntegral s)
+                (fromIntegral l)
+                (fromIntegral il))
         drawcall (Nothing, PrimitiveArrayIndexedInstanced p i il s a) binds = (attribs a binds, do
             bindIndexBuffer i
-            glDrawElementsInstancedBaseVertex (toGLtopology p) (fromIntegral $ indexArrayLength i) (indexType i) (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i)) (fromIntegral il) (fromIntegral s))
+            glDrawElementsInstancedBaseVertex
+                (toGLtopology p)
+                (fromIntegral $ indexArrayLength i)
+                (indexType i)
+                (intPtrToPtr $ fromIntegral $ offset i * glSizeOf (indexType i))
+                (fromIntegral il)
+                (fromIntegral s))
 
         bindIndexBuffer i = do
             case restart i of
@@ -230,6 +263,7 @@ toPrimitiveStream' getFeedbackBuffer sf = Shader $ do
                     glDisable GL_PRIMITIVE_RESTART
             bname <- readIORef (iArrName i)
             glBindBuffer GL_ELEMENT_ARRAY_BUFFER bname
+
         glSizeOf GL_UNSIGNED_INT = 4
         glSizeOf GL_UNSIGNED_SHORT = 2
         glSizeOf GL_UNSIGNED_BYTE = 1

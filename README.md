@@ -21,4 +21,4 @@ _(In addition to the unresolved bugs from the original code base: [#50](https://
 
 ## Future
 
-The work done in this fork is not intended to be published back into the original GPipe project. Some fixes and additions could (provided the GPipe's maintainer gives any sign of life), but the main bulk, GS (Geometry Shader) and TF (Transform Feedback), is not the proper way to do thing today. Indeed, in post modern OpenGL, GS and TF are seen as transitory and have been essentially replaced by CS (Compute Shader). A newer "GPipe-Compute" project alongside the current GPipe-Core would be more appropriate.
+The work done in this fork is not intended to be published back into the original GPipe project. Some fixes and additions could (provided the GPipe's maintainer gives any sign of life), but the main bulk, GS (Geometry Shader) and TF (Transform Feedback), is not the proper way to do things today. Indeed, in post modern OpenGL, GS and TF are seen as transitory and have been essentially replaced by CS (Compute Shader). A newer "GPipe-Compute" project alongside the current GPipe-Core would be more appropriate.

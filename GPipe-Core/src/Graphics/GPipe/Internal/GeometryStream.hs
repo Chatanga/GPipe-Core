@@ -483,7 +483,7 @@ newtype ToFragmentFromGeometry a b = ToFragmentFromGeometry (Kleisli (State Int)
 class FragmentInputFromGeometry p a where
     toFragmentFromGeometry :: ToFragmentFromGeometry (GGenerativeGeometry p (b, a)) (FragmentFormat a)
 
-instance FragmentCreator a => FragmentInputFromGeometry Triangles a where
+instance FragmentCreator a => FragmentInputFromGeometry p a where
     toFragmentFromGeometry = ToFragmentFromGeometry $ Kleisli $ \x -> do
         let ToAnotherFragment (Kleisli m) = toFragment2 :: ToAnotherFragment a (FragmentFormat a)
         m (evalState (createFragment :: State Int a) 0)
