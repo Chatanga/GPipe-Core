@@ -8,7 +8,7 @@
 - Instanced rendering in 3D textures.
 - Fixed bug in while loop ([#75](https://github.com/tobbebex/GPipe-Core/issues/75)).
 
-If you use [GPipe-GLFW](https://github.com/plredmond/GPipe-GLFW) (of course you do!), you will need the latest version (>= 1.4.2.0) in order to require an OpenGL Core Profile >= 4.5.
+If you use [GPipe-GLFW](https://github.com/plredmond/GPipe-GLFW) (of course you do!), you will need the latest version (>= 1.4.2.0) in order to require an OpenGL Core Profile >= 4.x.
 
 In the lack of any user level documentation for the changes introduced,
 you can have a look at my toy project [Hadron](https://github.com/Chatanga/Hadron) which uses both geometry shader and transform feedback.
@@ -18,6 +18,8 @@ you can have a look at my toy project [Hadron](https://github.com/Chatanga/Hadro
 _(In addition to the unresolved bugs from the original code base: [#50](https://github.com/tobbebex/GPipe-Core/issues/50), [#78](https://github.com/tobbebex/GPipe-Core/issues/78) and [#82](https://github.com/tobbebex/GPipe-Core/issues/82).)_
 
 **Unused varying in a GS**: if not every varying of a GS are used to compute the emitted vertex, the shader will fail to compile.
+
+**No sampler object**: no really a bug, but GPipe doesn't use [Sample Object](https://www.khronos.org/opengl/wiki/Sampler_Object) internally despite being a Core Profile 3.3 feature. Too bad I need it...
 
 ## Future
 
